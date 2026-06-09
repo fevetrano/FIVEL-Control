@@ -63,7 +63,7 @@ function App() {
           </div>
 
           <div className="bg-slate-900 p-6 rounded-xl border border-slate-800 shadow-lg">
-            <p className="text-sm font-medium text-slate-400 mb-1">Pedidos Ativos</p>
+            <p className="text-sm font-medium text-slate-400 mb-1">Pedidos em Aberto</p>
             <p className="text-2xl font-bold text-amber-400">{totalPedidos}</p>
           </div>
         </div>
@@ -71,29 +71,29 @@ function App() {
         {/* TABELA DE PEDIDOS */}
         <div className="bg-slate-900 rounded-xl border border-slate-800 shadow-lg overflow-hidden">
           <div className="p-5 border-b border-slate-800">
-            <h2 className="text-lg font-semibold text-white">Lista de Pedidos da Cartonagem</h2>
+            <h2 className="text-lg font-semibold text-white">Lista de Pedidos em Aberto</h2>
           </div>
           <div className="overflow-x-auto">
             <table className="w-full text-left border-collapse">
               <thead>
                 <tr className="bg-slate-900 text-slate-400 text-xs font-semibold uppercase border-b border-slate-800">
                   <th className="p-4">Cliente</th>
-                  <th className="p-4 text-right">Qtd</th>
-                  <th className="p-4 text-right">Preço Un.</th>
-                  <th className="p-4 text-right">Peso Un. (kg)</th>
-                  <th className="p-4 text-right">Peso Total (Ton)</th>
-                  <th className="p-4 text-right">Faturamento</th>
+                  <th className="p-4 text-center">Quantidade</th>
+                  <th className="p-4 text-center">Preço Un. (R$)</th>
+                  <th className="p-4 text-center">Peso Un. (kg)</th>
+                  <th className="p-4 text-center">Peso Total (Ton)</th>
+                  <th className="p-4 text-center">Faturamento</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-800/60 text-sm text-slate-300">
                 {pedidos.map((pedido) => (
                   <tr key={pedido.id} className="hover:bg-slate-800/30 transition-colors">
                     <td className="p-4 font-medium text-white">{pedido.cliente}</td>
-                    <td className="p-4 text-right">{pedido.quantidade.toLocaleString('pt-BR')}</td>
-                    <td className="p-4 text-right">R$ {pedido.preco_unitario.toFixed(2)}</td>
-                    <td className="p-4 text-right">{pedido.peso_unitario.toFixed(3)}</td>
-                    <td className="p-4 text-right font-mono text-emerald-400">{pedido.peso_total_ton.toFixed(2)} t</td>
-                    <td className="p-4 text-right font-medium text-indigo-400">
+                    <td className="p-4 text-center">{pedido.quantidade.toLocaleString('pt-BR')}</td>
+                    <td className="p-4 text-center">R$ {pedido.preco_unitario.toFixed(2)}</td>
+                    <td className="p-4 text-center">{pedido.peso_unitario.toFixed(3)}</td>
+                    <td className="p-4 text-center font-mono text-emerald-400">{pedido.peso_total_ton.toFixed(2)} t</td>
+                    <td className="p-4 text-center font-medium text-indigo-400">
                       R$ {pedido.faturamento_total.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
                     </td>
                   </tr>
