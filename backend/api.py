@@ -37,6 +37,12 @@ def obter_pedidos():
             peso_uni = dados.get("peso_unitario", 0)
             preco_uni = dados.get("preco_unitario", 0)
 
+            # Pegando as novas coordenadas (padrão 0 se não encontrar)
+            lat = dados.get("latitude", 0)
+            lng = dados.get("longitude", 0)
+            status = dados.get("status", "Pendente")
+            cidade_bloco = dados.get("cidade_bloco", "")
+
             # Executando a lógica de negócio e cálculos automáticos da cartonagem
             peso_total_kg = qtd * peso_uni
             faturamento_total = qtd * preco_uni
@@ -50,7 +56,11 @@ def obter_pedidos():
                 "preco_unitario": preco_uni,
                 "peso_total_kg": round(peso_total_kg, 2),
                 "peso_total_ton": round(peso_total_kg / 1000, 2),
-                "faturamento_total": round(faturamento_total, 2)
+                "faturamento_total": round(faturamento_total, 2),
+                "latitude": lat,
+                "longitude": lng,
+                "status": status,
+                "cidade_bloco": cidade_bloco
             })
 
         # Retorna a lista completa convertida em formato JSON (texto que a web entende)
