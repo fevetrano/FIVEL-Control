@@ -2,7 +2,9 @@ from flask import Flask, jsonify
 from flask_cors import CORS
 import firebase_admin
 from firebase_admin import credentials, firestore
+from datetime import datetime, timezone
 import os
+
 
 app = Flask(__name__)
 # Permite que o seu Frontend (React) acesse essa API sem bloqueios de segurança
@@ -47,6 +49,25 @@ def obter_pedidos():
             peso_total_kg = qtd * peso_uni
             faturamento_total = qtd * preco_uni
 
+            data_criacao = dados.get("data")
+            data_entrega_ts = dados.get("data_entrega")
+
+            dias_restantes = None
+            data_entrega_formatada = ""
+
+            if data_entrega_ts:
+                # Converte o timestamp do Firebase para o formato de data do Python
+                dt_entrega = data_entrega_ts.datetime if hasattr(
+                    data_entrega_ts, 'datetime') else data_entrega_ts
+                data_entrega_formatada = dt_entrega.strftime("%d/%m/%Y")
+
+                # Calcula a diferença de dias até hoje (considerando apenas a data, sem horas)
+                hoje = datetime.now(timezone.utc).date()
+                entrega_date = dt_entrega.date()
+
+                # Se for positivo, faltam X dias. Se for negativo, está atrasado há X dias.
+                dias_restantes = (entrega_date - hoje).days
+
             # Organiza as informações em um formato limpo para o React ler
             lista_pedidos.append({
                 "id": doc.id,
@@ -60,7 +81,9 @@ def obter_pedidos():
                 "latitude": lat,
                 "longitude": lng,
                 "status": status,
-                "cidade_bloco": cidade_bloco
+                "cidade_bloco": cidade_bloco,
+                "data_entrega": data_entrega_formatada,
+                "dias_restantes": dias_restantes
             })
 
         # Retorna a lista completa convertida em formato JSON (texto que a web entende)
