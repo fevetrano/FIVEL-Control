@@ -1,99 +1,247 @@
-from flask import Flask, jsonify
-from flask_cors import CORS
-import firebase_admin
-from firebase_admin import credentials, firestore
-from datetime import datetime, timezone
 import os
+from datetime import datetime
+from flask import Flask, jsonify, request
+from flask_cors import CORS
+import traceback
+import fdb
+from dotenv import load_dotenv
 
+# --- CARREGA O CAMINHO ABSOLUTO DA DLL E SUAS DEPENDÊNCIAS ---
+caminho_dll = os.path.abspath("fbclient.dll")
+
+if hasattr(os, "add_dll_directory"):
+    os.add_dll_directory(os.path.dirname(caminho_dll))
+
+try:
+    fdb.load_api(caminho_dll)
+except Exception as e:
+    print(f"Aviso ao carregar DLL: {e}")
+
+load_dotenv()
 
 app = Flask(__name__)
-# Permite que o seu Frontend (React) acesse essa API sem bloqueios de segurança
 CORS(app)
 
-# --- CONFIGURAÇÃO DO BANCO DE DADOS (FIREBASE) ---
-diretorio_atual = os.path.dirname(os.path.abspath(__file__))
-caminho_credenciais = os.path.join(
-    diretorio_atual, "fivel-control-credentials.json")
 
-cred = credentials.Certificate(caminho_credenciais)
-firebase_admin.initialize_app(cred)
-db = firestore.client()
+# --- FUNÇÃO DE CONEXÃO COM O FIREBIRD ---
+def get_db_connection():
+    return fdb.connect(
+        host=os.getenv("FIREBIRD_HOST"),
+        database=os.getenv("FIREBIRD_DATABASE"),
+        user=os.getenv("FIREBIRD_USER"),
+        password=os.getenv("FIREBIRD_PASSWORD"),
+        port=int(os.getenv("FIREBIRD_PORT", 3050)),
+        charset="NONE",  # Usa 'NONE' para desativar a transliteração estrita do Firebird
+    )
 
-# --- ROTA DA API ---
+
+# --- ROTAS DA API ---
 
 
-@app.route('/api/pedidos', methods=['GET'])
+@app.route("/api/pedidos", methods=["GET"])
 def obter_pedidos():
+    conn = None
     try:
-        pedidos_ref = db.collection("pedidos")
-        docs = pedidos_ref.stream()
+        conn = get_db_connection()
+        cur = conn.cursor()
 
-        lista_pedidos = []
+        # Consulta validada: retorna todos os pedidos ativos sem NF na FISCAL
+        query = """
+            SELECT 
+                p.ID_NUMPED AS ID_PEDIDO,
+                p.EMISSAO,
+                p.DATA_ENTREGA AS PRAZO,
+                p.TOTAL_PESO AS PESO_TOTAL_PEDIDO,
+                p.TOTAL_GERAL,
+                p.CANCELADO,
+                c.ID_CLIENTE,
+                c.NOME AS CLIENTE_RAZAO,
+                COALESCE(c.GUERRA, c.NOME) AS CLIENTE_FANTASIA,
+                c.ENT_ENDERECO AS ENDERECO,
+                c.ENT_NUMERO AS NUMERO,
+                c.ENT_BAIRRO AS BAIRRO,
+                c.ENT_CIDADE AS CIDADE,
+                c.ENT_ID_ESTADO AS UF,
+                c.ENT_CEP AS CEP,
+                i.ID_PRODUTO,
+                i.QUANT AS QUANTIDADE,
+                i.COMP AS COMPRIMENTO,
+                i.LARG AS LARGURA,
+                i.ALT AS ALTURA,
+                i.ID_ONDAFAB AS TIPO_ONDA,
+                i.ID_QUALIDFAB AS QUALIDADE_PAPEL,
+                i.PESO_TOT AS PESO_ITEM,
+                i.VLUNIT AS PRECO_UNITARIO
+            FROM PEDIDOS p
+            LEFT JOIN CLIENTES c ON p.ID_CLIENTE = c.ID_CLIENTE
+            LEFT JOIN PEDITEM i ON p.ID_NUMPED = i.ID_NUMPED
+            WHERE NOT EXISTS (
+                SELECT 1 FROM FISCAL f WHERE f.ID_NUMPED = p.ID_NUMPED
+            )
+            ORDER BY p.DATA_ENTREGA ASC;
+        """
 
-        for doc in docs:
-            dados = doc.to_dict()
+        cur.execute(query)
+        colunas = [desc[0].lower() for desc in cur.description]
+        registros = cur.fetchall()
 
-            # Pegando os dados do Firestore
-            cliente = dados.get("cliente", "Sem Nome")
-            qtd = dados.get("quantidade", 0)
-            peso_uni = dados.get("peso_unitario", 0)
-            preco_uni = dados.get("preco_unitario", 0)
+        pedidos_map = {}
+        hoje = datetime.now().date()
 
-            # Pegando as novas coordenadas (padrão 0 se não encontrar)
-            lat = dados.get("latitude", 0)
-            lng = dados.get("longitude", 0)
-            status = dados.get("status", "Pendente")
-            cidade_bloco = dados.get("cidade_bloco", "")
+        # Função auxiliar para limpar e sanitizar strings vindas do banco
+        def limpar_texto(valor):
+            if valor is None:
+                return ""
+            if isinstance(valor, bytes):
+                try:
+                    return valor.decode("latin-1", errors="replace").strip()
+                except Exception:
+                    return str(valor).strip()
+            return str(valor).strip()
 
-            # Executando a lógica de negócio e cálculos automáticos da cartonagem
-            peso_total_kg = qtd * peso_uni
-            faturamento_total = qtd * preco_uni
+        for reg in registros:
+            row = dict(zip(colunas, reg))
 
-            data_criacao = dados.get("data")
-            data_entrega_ts = dados.get("data_entrega")
+            if not row.get("id_pedido"):
+                continue
 
-            dias_restantes = None
-            data_entrega_formatada = ""
+            id_ped = str(row["id_pedido"])
 
-            if data_entrega_ts:
-                # Converte o timestamp do Firebase para o formato de data do Python
-                dt_entrega = data_entrega_ts.datetime if hasattr(
-                    data_entrega_ts, 'datetime') else data_entrega_ts
-                data_entrega_formatada = dt_entrega.strftime("%d/%m/%Y")
+            if id_ped not in pedidos_map:
+                dt_entrega = row.get("prazo")
+                data_entrega_formatada = ""
+                dias_restantes = None
 
-                # Calcula a diferença de dias até hoje (considerando apenas a data, sem horas)
-                hoje = datetime.now(timezone.utc).date()
-                entrega_date = dt_entrega.date()
+                if dt_entrega:
+                    try:
+                        if isinstance(dt_entrega, datetime):
+                            dt_entrega_date = dt_entrega.date()
+                        else:
+                            dt_entrega_date = dt_entrega
 
-                # Se for positivo, faltam X dias. Se for negativo, está atrasado há X dias.
-                dias_restantes = (entrega_date - hoje).days
+                        data_entrega_formatada = dt_entrega_date.strftime("%d/%m/%Y")
+                        dias_restantes = (dt_entrega_date - hoje).days
+                    except Exception:
+                        dias_restantes = None
 
-            # Organiza as informações em um formato limpo para o React ler
-            lista_pedidos.append({
-                "id": doc.id,
-                "cliente": cliente,
-                "quantidade": qtd,
-                "peso_unitario": peso_uni,
-                "preco_unitario": preco_uni,
-                "peso_total_kg": round(peso_total_kg, 2),
-                "peso_total_ton": round(peso_total_kg / 1000, 2),
-                "faturamento_total": round(faturamento_total, 2),
-                "latitude": lat,
-                "longitude": lng,
-                "status": status,
-                "cidade_bloco": cidade_bloco,
-                "data_entrega": data_entrega_formatada,
-                "dias_restantes": dias_restantes
-            })
+                peso_tot_kg = (
+                    float(row["peso_total_pedido"])
+                    if row.get("peso_total_pedido")
+                    else 0.0
+                )
+                faturamento_tot = (
+                    float(row["total_geral"]) if row.get("total_geral") else 0.0
+                )
 
-        # Retorna a lista completa convertida em formato JSON (texto que a web entende)
+                cliente_fantasia = limpar_texto(row.get("cliente_fantasia"))
+                cliente_razao = limpar_texto(row.get("cliente_razao"))
+                cliente_nome = cliente_fantasia or cliente_razao or "Cliente Sem Nome"
+
+                cidade = limpar_texto(row.get("cidade"))
+                end = limpar_texto(row.get("endereco"))
+                num = limpar_texto(row.get("numero"))
+                bairro = limpar_texto(row.get("bairro"))
+
+                endereco_comp = f"{end}, {num} - {bairro}".strip(", -")
+
+                pedidos_map[id_ped] = {
+                    "id": id_ped,
+                    "cliente": cliente_nome,
+                    "razao_social": cliente_razao,
+                    "cidade_bloco": cidade,
+                    "endereco_completo": endereco_comp,
+                    "status": "Pendente",
+                    "peso_total_kg": round(peso_tot_kg, 2),
+                    "peso_total_ton": round(peso_tot_kg / 1000, 2),
+                    "faturamento_total": round(faturamento_tot, 2),
+                    "data_entrega": data_entrega_formatada,
+                    "dias_restantes": dias_restantes,
+                    "latitude": -23.6939,
+                    "longitude": -46.5650,
+                    "itens": [],
+                }
+
+            if row.get("id_produto"):
+                pedidos_map[id_ped]["itens"].append(
+                    {
+                        "id_produto": limpar_texto(row["id_produto"]),
+                        "quantidade": row.get("quantidade") or 0,
+                        "comprimento": row.get("comprimento") or 0,
+                        "largura": row.get("largura") or 0,
+                        "altura": row.get("altura") or 0,
+                        "tipo_onda": limpar_texto(row.get("tipo_onda")),
+                        "qualidade_papel": limpar_texto(row.get("qualidade_papel")),
+                        "peso_item": (
+                            float(row["peso_item"]) if row.get("peso_item") else 0.0
+                        ),
+                        "preco_unitario": (
+                            float(row["preco_unitario"])
+                            if row.get("preco_unitario")
+                            else 0.0
+                        ),
+                    }
+                )
+
+        lista_pedidos = list(pedidos_map.values())
         return jsonify(lista_pedidos), 200
 
     except Exception as e:
-        return jsonify({"erro": str(e)}), 500
+        print("\n" + "=" * 50)
+        print("ERRO OCORRIDO NA CONSULTA AO FIREBIRD:")
+        traceback.print_exc()
+        print("=" * 50 + "\n")
+        return jsonify({"erro": f"Erro ao consultar Firebird: {str(e)}"}), 500
+
+    finally:
+        if conn:
+            conn.close()
 
 
-# --- INICIALIZAÇÃO DO SERVIDOR ---
-if __name__ == '__main__':
-    # O servidor vai rodar na porta 5000 por padrão
+@app.route("/api/pedidos/status-lote", methods=["PUT"])
+def atualizar_status_lote():
+    conn = None
+    try:
+        dados = request.get_json()
+        ids = dados.get("ids", [])
+        novo_status = dados.get("status", "Em Entrega")
+
+        if not ids:
+            return jsonify({"erro": "Nenhum ID fornecido"}), 400
+
+        conn = get_db_connection()
+        cur = conn.cursor()
+
+        for id_pedido in ids:
+            cur.execute(
+                "UPDATE PEDIDOS SET KANBAN = ? WHERE ID_NUMPED = ?",
+                (novo_status[0], id_pedido),
+            )
+
+        conn.commit()
+
+        return (
+            jsonify(
+                {
+                    "sucesso": True,
+                    "mensagem": f"{len(ids)} pedidos atualizados com sucesso.",
+                }
+            ),
+            200,
+        )
+
+    except Exception as e:
+        if conn:
+            conn.rollback()
+        print("ERRO NO UPDATE:", str(e))
+        return (
+            jsonify({"erro": f"Erro ao atualizar status no Firebird: {str(e)}"}),
+            500,
+        )
+
+    finally:
+        if conn:
+            conn.close()
+
+
+if __name__ == "__main__":
     app.run(debug=True, port=5000)

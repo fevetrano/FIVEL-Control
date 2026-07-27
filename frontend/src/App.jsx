@@ -14,15 +14,16 @@ let DefaultIcon = L.icon({
 });
 L.Marker.prototype.options.icon = DefaultIcon;
 
-// Coordenadas centrais da empresa (Origem em São Bernardo do Campo)
 const COORDENADAS_EMPRESA = [-23.6939, -46.5650]
 
 function App() {
   const [pedidos, setPedidos] = useState([])
   const [carregando, setCarregando] = useState(true)
-  const [abaAtiva, setAbaAtiva] = useState('mapa') // 'mapa' ou 'prazos'
-  const [pedidosSelecionados, setPedidosSelecionados] = useState([]) // Guarda os IDs dos pedidos marcados para rota
-  const [rotasGeometria, setRotasGeometria] = useState({}) // Guarda as coordenadas reais das ruas para cada pedido
+  const [abaAtiva, setAbaAtiva] = useState('mapa') 
+  const [pedidosSelecionados, setPedidosSelecionados] = useState([]) 
+  const [rotaIdaGeometria, setRotaIdaGeometria] = useState([]) 
+  const [rotaVoltaGeometria, setRotaVoltaGeometria] = useState([]) 
+  const [ordemEntregas, setOrdemEntregas] = useState([]) 
 
   useEffect(() => {
     axios.get('http://localhost:5000/api/pedidos')
@@ -36,20 +37,80 @@ function App() {
       })
   }, [])
 
-  // Função para buscar a rota real pelas ruas via API OSRM
-  const buscarRotaReal = async (id, latDestino, lngDestino) => {
-    if (rotasGeometria[id]) return;
+  // Função auxiliar para calcular a distância entre duas coordenadas (Fórmula de Haversine)
+  const calcularDistancia = (coord1, coord2) => {
+    if (!coord1 || !coord2) return 0;
+    const R = 6371; 
+    const dLat = (coord2[0] - coord1[0]) * Math.PI / 180;
+    const dLon = (coord2[1] - coord1[1]) * Math.PI / 180;
+    const a = 
+      Math.sin(dLat/2) * Math.sin(dLat/2) +
+      Math.cos(coord1[0] * Math.PI / 180) * Math.cos(coord2[0] * Math.PI / 180) * Math.sin(dLon/2) * Math.sin(dLon/2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+    return R * c;
+  }
+
+  const calcularRotaOtimizada = async (idsSelecionados) => {
+    if (idsSelecionados.length === 0) {
+      setRotaIdaGeometria([]);
+      setRotaVoltaGeometria([]);
+      setOrdemEntregas([]);
+      return;
+    }
+
+    const pedidosParaRota = pedidos.filter(p => p && idsSelecionados.includes(p.id) && p.latitude && p.longitude);
+
+    if (pedidosParaRota.length === 0) return;
 
     try {
-      const url = `https://router.project-osrm.org/route/v1/driving/${COORDENADAS_EMPRESA[1]},${COORDENADAS_EMPRESA[0]};${lngDestino},${latDestino}?overview=full&geometries=geojson`;
+      let coordenadasString = `${COORDENADAS_EMPRESA[1]},${COORDENADAS_EMPRESA[0]}`;
+      
+      pedidosParaRota.forEach(p => {
+        coordenadasString += `;${p.longitude},${p.latitude}`;
+      });
+
+      const url = `https://router.project-osrm.org/trip/v1/driving/${coordenadasString}?overview=full&geometries=geojson&source=first&destination=any`;
+      
       const res = await axios.get(url);
       
-      if (res.data.routes && res.data.routes.length > 0) {
-        const coordenadasInvertidas = res.data.routes[0].geometry.coordinates.map(coord => [coord[1], coord[0]]);
-        setRotasGeometria(prev => ({ ...prev, [id]: coordenadasInvertidas }));
+      if (res.data.trips && res.data.trips.length > 0) {
+        const coordenadasInvertidas = res.data.trips[0].geometry.coordinates.map(coord => [coord[1], coord[0]]);
+        const waypoints = res.data.waypoints;
+        
+        const ordemCalculada = waypoints
+          .map(wp => wp.waypoint_index)
+          .filter(index => index !== 0)
+          .map(index => pedidosParaRota[index - 1] ? pedidosParaRota[index - 1].id : null)
+          .filter(id => id !== null); 
+
+        setOrdemEntregas(ordemCalculada);
+
+        const ultimoPedidoId = ordemCalculada[ordemCalculada.length - 1];
+        const ultimoPedido = pedidosParaRota.find(p => p.id === ultimoPedidoId);
+
+        if (ultimoPedido) {
+          const coordUltimoCliente = [ultimoPedido.latitude, ultimoPedido.longitude];
+          
+          let indiceCorte = 0;
+          let menorDistancia = Infinity;
+
+          coordenadasInvertidas.forEach((coord, index) => {
+            const dist = calcularDistancia(coord, coordUltimoCliente);
+            if (dist < menorDistancia) {
+              menorDistancia = dist;
+              indiceCorte = index;
+            }
+          });
+
+          setRotaIdaGeometria(coordenadasInvertidas.slice(0, indiceCorte + 1));
+          setRotaVoltaGeometria(coordenadasInvertidas.slice(indiceCorte));
+        } else {
+          setRotaIdaGeometria(coordenadasInvertidas);
+          setRotaVoltaGeometria([]);
+        }
       }
     } catch (err) {
-      console.error("Erro ao traçar rota real pelas ruas:", err);
+      console.error("Erro ao calcular trajeto otimizado:", err);
     }
   }
 
@@ -58,34 +119,33 @@ function App() {
       prevPedidos.map(p => p.id === id ? { ...p, status: novoStatus } : p)
     )
     if (novoStatus !== 'Pronto') {
-      setPedidosSelecionados(prev => prev.filter(item => item !== id))
+      const novaSelecao = pedidosSelecionados.filter(item => item !== id);
+      setPedidosSelecionados(novaSelecao);
+      calcularRotaOtimizada(novaSelecao);
     }
   }
-
-  // Separação dos escopos de dados
-  const pedidosProntos = pedidos.filter(p => p && p.status === 'Pronto')
-  const pedidosEmAberto = pedidos.filter(p => p && p.status !== 'Pronto')
-
-  // Indicadores globais
-  const faturamentoTotal = pedidos.reduce((acc, p) => acc + (p.faturamento_total || 0), 0)
-  const pesoTotalTon = pedidos.reduce((acc, p) => acc + (p.peso_total_ton || 0), 0)
-  const totalPedidos = pedidos.length
 
   const toggleSelecaoPedido = (pedido) => {
+    if (!pedido) return;
+    let novaSelecao;
     if (pedidosSelecionados.includes(pedido.id)) {
-      setPedidosSelecionados(pedidosSelecionados.filter(item => item !== pedido.id))
+      novaSelecao = pedidosSelecionados.filter(item => item !== pedido.id);
     } else {
-      setPedidosSelecionados([...pedidosSelecionados, pedido.id])
-      if (pedido.latitude && pedido.longitude) {
-        buscarRotaReal(pedido.id, pedido.latitude, pedido.longitude)
-      }
+      novaSelecao = [...pedidosSelecionados, pedido.id];
     }
+    setPedidosSelecionados(novaSelecao);
+    calcularRotaOtimizada(novaSelecao);
   }
 
-  // Cores dinâmicas para os blocos de prazos (Verde, Vermelho e Amarelo conforme criticidade)
+  const pedidosProntos = pedidos.filter(p => p && p.status === 'Pronto')
+  const pedidosEmAberto = pedidos.filter(p => p && p.status && p.status !== 'Pronto')
+
+  const faturamentoTotal = pedidos.reduce((acc, p) => acc + ((p && p.faturamento_total) || 0), 0)
+  const pesoTotalTon = pedidos.reduce((acc, p) => acc + ((p && p.peso_total_ton) || 0), 0)
+  const totalPedidos = pedidos.length
+
   const renderizarTagPrazo = (dias) => {
-    if (dias === null || dias === undefined) return <span className="text-slate-500">-</span>;
-    
+    if (dias === null || dias === undefined || isNaN(dias)) return <span className="text-slate-500">-</span>;
     if (dias < 0) {
       return (
         <span className="inline-flex items-center gap-1.5 px-3 py-1 text-xs font-semibold rounded-full bg-red-500/10 text-red-400 border border-red-500/30">
@@ -110,7 +170,6 @@ function App() {
     }
   }
 
-  // Estilização premium para as caixas de Status (Fundo + Texto + Borda combinando com o box superior)
   const obterEstiloStatusCompleto = (status) => {
     const estilos = {
       'Pendente': 'bg-amber-500/10 text-amber-400 border-amber-500/30 hover:border-amber-500/50',
@@ -118,7 +177,7 @@ function App() {
       'Produção': 'bg-purple-500/10 text-purple-400 border-purple-500/30 hover:border-purple-500/50',
       'Pronto': 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30 hover:border-emerald-500/50'
     }
-    return estilos[status] || 'bg-slate-800 text-slate-300 border-slate-700'
+    return estilos[status] || 'bg-slate-800 text-slate-300 border-slate-700 hover:border-slate-600'
   }
 
   return (
@@ -154,7 +213,6 @@ function App() {
 
       <main className="w-full mx-auto">
         {abaAtiva === 'mapa' ? (
-          /* ================= ABA 1: GERAL E MAPA ================= */
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start w-full">
             
             <div className="lg:col-span-8 space-y-6 w-full">
@@ -192,9 +250,7 @@ function App() {
                   <table className="w-full text-left border-collapse min-w-[600px]">
                     <thead>
                       <tr className="bg-slate-900 text-slate-400 text-xs font-semibold uppercase border-b border-slate-800">
-                        <th className="p-4 w-16 text-center">
-                          <span className="text-xs font-semibold uppercase text-slate-400">Rota</span>
-                        </th>
+                        <th className="p-4 w-16 text-center">Rota</th>
                         <th className="p-4">Cliente</th>
                         <th className="p-4 text-center">Qtd</th>
                         <th className="p-4 text-center">Peso</th>
@@ -205,7 +261,6 @@ function App() {
                     <tbody className="divide-y divide-slate-800/60 text-sm text-slate-300">
                       {pedidosProntos.map((pedido) => (
                         <tr key={pedido.id} className={`hover:bg-slate-800/30 transition-colors ${pedidosSelecionados.includes(pedido.id) ? 'bg-indigo-500/5' : ''}`}>
-                          {/* SELETOR DE ROTA COM CHECKBOX PREMIUM */}
                           <td className="p-4 text-center">
                             <label className="relative flex items-center justify-center cursor-pointer select-none group">
                               <input
@@ -228,7 +283,7 @@ function App() {
                           </td>
                           <td className="p-4 font-medium text-white">
                             {pedido.cliente || 'Sem Nome'}
-                            <span className="block text-xs text-slate-500">{pedido.cidade_bloco}</span>
+                            <span className="block text-xs text-slate-500">{pedido.cidade_bloco || ''}</span>
                           </td>
                           <td className="p-4 text-center">{(pedido.quantidade || 0).toLocaleString('pt-BR')}</td>
                           <td className="p-4 text-center font-mono text-emerald-400">{(pedido.peso_total_ton || 0).toFixed(2)} t</td>
@@ -262,68 +317,134 @@ function App() {
               </div>
             </div>
 
-            {/* MAPA */}
-            <div className="lg:col-span-4 bg-slate-900 rounded-xl border border-slate-800 shadow-lg overflow-hidden flex flex-col h-[550px] lg:sticky lg:top-6 w-full">
-              <div className="p-5 border-b border-slate-800 flex justify-between items-center">
-                <h2 className="text-lg font-semibold text-white">Mapa de Fluxo de Entregas</h2>
-                <span className="text-xs text-slate-400">Rotas Reais via OSRM</span>
-              </div>
-              <div className="h-full w-full relative z-10">
-                <MapContainer center={[-23.5505, -46.6333]} zoom={9} className="h-full w-full">
-                  <TileLayer
-                    attribution='&copy; OpenStreetMap &copy; CARTO'
-                    url="https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png"
-                  />
-                  
-                  <Marker position={COORDENADAS_EMPRESA}>
-                    <Popup>
-                      <div className="text-slate-900 p-1">
-                        <strong className="text-indigo-600">Minha Empresa</strong><br />
-                        <span className="text-xs text-slate-500">SBC - Ponto de Partida</span>
-                      </div>
-                    </Popup>
-                  </Marker>
+            {/* COLUNA DO MAPA E LOGÍSTICA */}
+            <div className="lg:col-span-4 lg:sticky lg:top-6 w-full space-y-6">
+              {/* MAPA */}
+              <div className="bg-slate-900 rounded-xl border border-slate-800 shadow-lg overflow-hidden flex flex-col h-[550px] w-full">
+                <div className="p-5 border-b border-slate-800 flex justify-between items-center">
+                  <h2 className="text-lg font-semibold text-white">Mapa de Fluxo de Entregas</h2>
+                  <span className="text-xs text-slate-400">Rota Unificada OSRM Trip</span>
+                </div>
+                <div className="h-full w-full relative z-10">
+                  <MapContainer center={COORDENADAS_EMPRESA} zoom={10} className="h-full w-full">
+                    <TileLayer
+                      attribution='&copy; OpenStreetMap &copy; CARTO'
+                      url="https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png"
+                    />
+                    
+                    <Marker position={COORDENADAS_EMPRESA}>
+                      <Popup>
+                        <div className="text-slate-900 p-1">
+                          <strong className="text-indigo-600">Minha Empresa</strong><br />
+                          <span className="text-xs text-slate-500">SBC - Ponto de Partida</span>
+                        </div>
+                      </Popup>
+                    </Marker>
 
-                  {pedidosProntos.map((pedido) => {
-                    const temPosicao = pedido.latitude && pedido.longitude;
-                    const estaMarcado = pedidosSelecionados.includes(pedido.id);
-                    const geometriaReal = rotasGeometria[pedido.id];
-
-                    return temPosicao && (
-                      <React.Fragment key={pedido.id}>
-                        <Marker position={[pedido.latitude, pedido.longitude]}>
+                    {pedidosProntos.map((pedido) => {
+                      const temPosicao = pedido && pedido.latitude && pedido.longitude;
+                      return temPosicao && (
+                        <Marker key={pedido.id} position={[pedido.latitude, pedido.longitude]}>
                           <Popup>
                             <div className="text-slate-900 p-1">
                               <strong className="text-base">{pedido.cliente || 'Sem Nome'}</strong><br />
-                              <span className="text-xs text-slate-500">{pedido.cidade_bloco}</span>
+                              <span className="text-xs text-slate-500">{pedido.cidade_bloco || ''}</span>
                               <hr className="my-1 border-slate-200" />
                               <p className="text-xs m-0"><strong>Carga:</strong> {(pedido.peso_total_ton || 0).toFixed(2)} Ton</p>
                             </div>
                           </Popup>
                         </Marker>
+                      )
+                    })}
 
-                        {estaMarcado && geometriaReal && (
-                          <Polyline
-                            positions={geometriaReal}
-                            pathOptions={{ color: '#6366f1', weight: 4, opacity: 0.9 }}
-                          />
-                        )}
+                    {rotaIdaGeometria.length > 0 && (
+                      <Polyline
+                        key={`ida-${pedidosSelecionados.join('-')}`}
+                        positions={rotaIdaGeometria}
+                        pathOptions={{ color: '#06b6d4', weight: 5, opacity: 0.95 }} 
+                      />
+                    )}
 
-                        {estaMarcado && geometriaReal && (
-                          <Polyline
-                            positions={[...geometriaReal].reverse()}
-                            pathOptions={{ color: '#94a3b8', weight: 2, opacity: 0.6, dashArray: '5, 5' }}
-                          />
-                        )}
-                      </React.Fragment>
-                    )
-                  })}
-                </MapContainer>
+                    {rotaVoltaGeometria.length > 0 && (
+                      <Polyline
+                        key={`volta-${pedidosSelecionados.join('-')}`}
+                        positions={rotaVoltaGeometria}
+                        pathOptions={{ color: '#a855f7', weight: 5, opacity: 0.95 }} 
+                      />
+                    )}
+                  </MapContainer>
+                </div>
+              </div>
+
+              {/* PAINEL LOGÍSTICA ATUALIZADO (GRID/LISTA PADRONIZADO E EXPANDIDO) */}
+              <div className="bg-slate-900 p-5 rounded-xl border border-slate-800 shadow-lg w-full">
+                <div className="border-b border-slate-800 pb-3 mb-5">
+                  <h2 className="text-lg font-semibold text-white">Logística LIFO Otimizada</h2>
+                  <p className="text-xs text-slate-400">Sequenciamento físico estruturado pela menor distância</p>
+                </div>
+                
+                <div className="space-y-6 text-sm">
+                  {/* Bloco 1: Ordem de Entrega */}
+                  <div>
+                    <span className="block text-xs font-bold text-slate-400 uppercase tracking-wider mb-3">
+                      Ordem de Entrega (Menor Rota)
+                    </span>
+                    <div className="flex flex-col gap-2.5">
+                      {ordemEntregas.length > 0 ? (
+                        ordemEntregas.map((id, index) => {
+                          const pedido = pedidos.find(p => p && p.id === id);
+                          if (!pedido) return null;
+                          return (
+                            <div key={`del-${id}`} className="flex items-center gap-4 bg-slate-950 border border-slate-800 p-3.5 rounded-xl transition-colors hover:border-slate-700">
+                              <span className="bg-emerald-500/10 text-emerald-400 px-2.5 py-1 rounded-lg border border-emerald-500/30 font-bold text-xs shrink-0">
+                                {index + 1}º Destino
+                              </span>
+                              <div className="min-w-0 flex-1">
+                                <p className="text-sm font-bold text-white truncate">{pedido.cliente || 'Sem nome'}</p>
+                                <p className="text-xs text-slate-400 truncate mt-0.5">{pedido.cidade_bloco || ''}</p>
+                              </div>
+                            </div>
+                          );
+                        })
+                      ) : (
+                        <span className="text-xs text-slate-500 bg-slate-950/40 p-3 rounded-lg border border-dashed border-slate-800 block text-center">
+                          Selecione os pedidos para montar o itinerário estruturado.
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                  
+                  {/* Bloco 2: Ordem de Carregamento (LIFO) -> Idêntico em estrutura, variando cor */}
+                  {ordemEntregas.length > 0 && (
+                    <div>
+                      <span className="block text-xs font-bold text-slate-400 uppercase tracking-wider mb-3">
+                        Ordem de Carregamento no Caminhão (LIFO)
+                      </span>
+                      <div className="flex flex-col gap-2.5">
+                        {[...ordemEntregas].reverse().map((id, index) => {
+                          const pedido = pedidos.find(p => p && p.id === id);
+                          if (!pedido) return null;
+                          return (
+                            <div key={`load-${id}`} className="flex items-center gap-4 bg-slate-950 border border-slate-800 p-3.5 rounded-xl transition-colors hover:border-slate-700">
+                              <span className="bg-purple-500/10 text-purple-400 px-2.5 py-1 rounded-lg border border-purple-500/30 font-bold text-xs shrink-0">
+                                {index + 1}º Colocar
+                              </span>
+                              <div className="min-w-0 flex-1">
+                                <p className="text-sm font-bold text-white truncate">{pedido.cliente || 'Sem nome'}</p>
+                                <p className="text-xs text-slate-400 truncate mt-0.5">{pedido.cidade_bloco || ''}</p>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+                </div>
               </div>
             </div>
           </div>
         ) : (
-          /* ================= ABA 2: MONITOR E EDIÇÃO DE STATUS CUSTOMIZADO ================= */
+          /* ================= ABA 2: MONITOR E EDIÇÃO DE STATUS ================= */
           <div className="space-y-6 w-full">
             <div className="bg-slate-900 p-5 rounded-xl border border-slate-800 flex flex-col sm:flex-row justify-between items-start sm:items-center shadow-md gap-4 w-full">
               <div>
@@ -348,42 +469,40 @@ function App() {
                   </thead>
                   <tbody className="divide-y divide-slate-800/60 text-sm text-slate-300">
                     {pedidosEmAberto
-                      .sort((a, b) => (a.dias_extra || 0) - (b.dias_extra || 0)) 
-                      .map((pedido) => (
-                        <tr key={pedido.id} className="hover:bg-slate-800/20 transition-colors">
-                          <td className="p-4 font-medium text-white">
-                            {pedido.cliente || 'Sem Nome'}
-                            <span className="block text-xs text-slate-400">{pedido.cidade_bloco}</span>
-                          </td>
-                          <td className="p-4 text-center font-mono text-emerald-400">{(pedido.peso_total_ton || 0).toFixed(2)} t</td>
-                          <td className="p-4 text-center">
-                            {renderizarTagPrazo(pedido.dias_restantes)}
-                          </td>
-                          
-                          {/* SELETOR DE STATUS PREMIUM TOTALMENTE CUSTOMIZADO */}
-                          <td className="p-4 text-center">
-                            <div className="relative inline-block w-48 text-left group">
-                              <select
-                                value={pedido.status}
-                                onChange={(e) => alterarStatusPedido(pedido.id, e.target.value)}
-                                className={`w-full appearance-none px-4 py-2 rounded-full text-xs font-bold border cursor-pointer transition-all focus:outline-none pr-8 text-center ${obterEstiloStatusCompleto(pedido.status)}`}
-                                style={{ WebkitAppearance: 'none', MozAppearance: 'none' }}
-                              >
-                                <option value="Pendente" className="bg-slate-950 text-amber-400 font-semibold">Pendente</option>
-                                <option value="Compras" className="bg-slate-950 text-sky-400 font-semibold">Compras</option>
-                                <option value="Produção" className="bg-slate-950 text-purple-400 font-semibold">Produção</option>
-                                <option value="Pronto" className="bg-slate-950 text-emerald-400 font-semibold">Pronto</option>
-                              </select>
-                              {/* Seta minimalista estática - Sem alteração de cor ou fundo no hover */}
-                              <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center pr-4 text-slate-400/80 group-hover:text-slate-300">
-                                <svg className="h-3 w-3 transition-transform duration-200" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M19 9l-7 7-7-7" />
-                                </svg>
+                      .map((pedido) => {
+                        if (!pedido) return null;
+                        return (
+                          <tr key={pedido.id} className="hover:bg-slate-800/20 transition-colors">
+                            <td className="p-4 font-medium text-white">
+                              {pedido.cliente || 'Sem Nome'}
+                              <span className="block text-xs text-slate-400">{pedido.cidade_bloco || ''}</span>
+                            </td>
+                            <td className="p-4 text-center font-mono text-emerald-400">{(pedido.peso_total_ton || 0).toFixed(2)} t</td>
+                            <td className="p-4 text-center">
+                              {renderizarTagPrazo(pedido.dias_restantes)}
+                            </td>
+                            <td className="p-4 text-center">
+                              <div className="relative inline-block w-48 text-left group">
+                                <select
+                                  value={pedido.status || 'Pendente'}
+                                  onChange={(e) => alterarStatusPedido(pedido.id, e.target.value)}
+                                  className={`w-full appearance-none px-4 py-2 rounded-full text-xs font-bold border cursor-pointer transition-all focus:outline-none pr-8 text-center ${obterEstiloStatusCompleto(pedido.status)}`}
+                                >
+                                  <option value="Pendente" className="bg-slate-950 text-amber-400 font-semibold">Pendente</option>
+                                  <option value="Compras" className="bg-slate-950 text-sky-400 font-semibold">Compras</option>
+                                  <option value="Produção" className="bg-slate-950 text-purple-400 font-semibold">Produção</option>
+                                  <option value="Pronto" className="bg-slate-950 text-emerald-400 font-semibold">Pronto</option>
+                                </select>
+                                <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center pr-4 text-slate-400/80 group-hover:text-slate-300">
+                                  <svg className="h-3 w-3 transition-transform duration-200" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M19 9l-7 7-7-7" />
+                                  </svg>
+                                </div>
                               </div>
-                            </div>
-                          </td>
-                        </tr>
-                      ))}
+                            </td>
+                          </tr>
+                        );
+                      })}
                     {pedidosEmAberto.length === 0 && (
                       <tr>
                         <td colSpan="4" className="p-8 text-center text-slate-500">
