@@ -3,14 +3,14 @@ import axios from 'axios'
 import { MapContainer, TileLayer, Marker, Popup, Polyline } from 'react-leaflet'
 import L from 'leaflet'
 
-// Correção para o ícone do pino do Leaflet aparecer corretamente no React
 import markerIcon from 'leaflet/dist/images/marker-icon.png'
 import markerShadow from 'leaflet/dist/images/marker-shadow.png'
+
 let DefaultIcon = L.icon({
-    iconUrl: markerIcon,
-    shadowUrl: markerShadow,
-    iconSize: [25, 41],
-    iconAnchor: [12, 41]
+  iconUrl: markerIcon,
+  shadowUrl: markerShadow,
+  iconSize: [25, 41],
+  iconAnchor: [12, 41]
 });
 L.Marker.prototype.options.icon = DefaultIcon;
 
@@ -25,8 +25,13 @@ function App() {
   const [rotaVoltaGeometria, setRotaVoltaGeometria] = useState([]) 
   const [ordemEntregas, setOrdemEntregas] = useState([]) 
 
-  useEffect(() => {
-    axios.get('http://localhost:5000/api/pedidos')
+  // ESTADOS DE ORDENAÇÃO
+  const [ordenarPor, setOrdenarPor] = useState('prazo') // 'prazo', 'id_pedido', 'emissao', 'data_entrega'
+  const [ordem, setOrdem] = useState('asc') // 'asc' ou 'desc'
+
+  const carregarPedidos = () => {
+    setCarregando(true)
+    axios.get(`http://localhost:5000/api/pedidos?ordenar_por=${ordenarPor}&ordem=${ordem}`)
       .then(response => {
         setPedidos(Array.isArray(response.data) ? response.data : [])
         setCarregando(false)
@@ -35,9 +40,13 @@ function App() {
         console.error("Erro ao buscar pedidos da API:", error)
         setCarregando(false)
       })
-  }, [])
+  }
 
-  // Função auxiliar para calcular a distância entre duas coordenadas (Fórmula de Haversine)
+  // Recarrega sempre que alterar a ordenação
+  useEffect(() => {
+    carregarPedidos()
+  }, [ordenarPor, ordem])
+
   const calcularDistancia = (coord1, coord2) => {
     if (!coord1 || !coord2) return 0;
     const R = 6371; 
@@ -144,30 +153,39 @@ function App() {
   const pesoTotalTon = pedidos.reduce((acc, p) => acc + ((p && p.peso_total_ton) || 0), 0)
   const totalPedidos = pedidos.length
 
-  const renderizarTagPrazo = (dias) => {
+  const renderizarTagPrazo = (dias, dataEntrega) => {
     if (dias === null || dias === undefined || isNaN(dias)) return <span className="text-slate-500">-</span>;
+    
+    let tag = null;
     if (dias < 0) {
-      return (
+      tag = (
         <span className="inline-flex items-center gap-1.5 px-3 py-1 text-xs font-semibold rounded-full bg-red-500/10 text-red-400 border border-red-500/30">
           <span className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse"></span>
-          Atrasado {Math.abs(dias)}d
+          Atrasado ({Math.abs(dias)}d)
         </span>
       )
     } else if (dias === 0 || dias === 1) {
-      return (
+      tag = (
         <span className="inline-flex items-center gap-1.5 px-3 py-1 text-xs font-semibold rounded-full bg-amber-500/10 text-amber-400 border border-amber-500/30">
           <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse"></span>
           Prazo: {dias}d
         </span>
       )
     } else {
-      return (
+      tag = (
         <span className="inline-flex items-center gap-1.5 px-3 py-1 text-xs font-semibold rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/30">
           <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
           Prazo: {dias}d
         </span>
       )
     }
+
+    return (
+      <div className="flex flex-col items-center gap-1">
+        {tag}
+        {dataEntrega && <span className="text-[10px] text-slate-400">Entrega: {dataEntrega}</span>}
+      </div>
+    )
   }
 
   const obterEstiloStatusCompleto = (status) => {
@@ -251,8 +269,8 @@ function App() {
                     <thead>
                       <tr className="bg-slate-900 text-slate-400 text-xs font-semibold uppercase border-b border-slate-800">
                         <th className="p-4 w-16 text-center">Rota</th>
-                        <th className="p-4">Cliente</th>
-                        <th className="p-4 text-center">Qtd</th>
+                        <th className="p-4">Pedido / Cliente</th>
+                        <th className="p-4 text-center">Itens</th>
                         <th className="p-4 text-center">Peso</th>
                         <th className="p-4 text-center">Valor (R$)</th>
                         <th className="p-4 text-center">Status</th>
@@ -282,10 +300,20 @@ function App() {
                             </label>
                           </td>
                           <td className="p-4 font-medium text-white">
-                            {pedido.cliente || 'Sem Nome'}
+                            <div className="flex items-center gap-2">
+                              <span className="text-xs bg-slate-800 px-2 py-0.5 rounded text-indigo-300 font-mono">
+                                #{pedido.id_pedido}
+                              </span>
+                              {pedido.pedido_cliente && (
+                                <span className="text-xs bg-slate-800/60 px-2 py-0.5 rounded text-slate-400 font-mono">
+                                  Ref: {pedido.pedido_cliente}
+                                </span>
+                              )}
+                            </div>
+                            <div className="mt-1">{pedido.cliente || 'Sem Nome'}</div>
                             <span className="block text-xs text-slate-500">{pedido.cidade_bloco || ''}</span>
                           </td>
-                          <td className="p-4 text-center">{(pedido.quantidade || 0).toLocaleString('pt-BR')}</td>
+                          <td className="p-4 text-center font-mono">{pedido.total_itens || 0}</td>
                           <td className="p-4 text-center font-mono text-emerald-400">{(pedido.peso_total_ton || 0).toFixed(2)} t</td>
                           <td className="p-4 text-center font-medium text-indigo-400">
                             R$ {(pedido.faturamento_total || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
@@ -350,6 +378,7 @@ function App() {
                               <strong className="text-base">{pedido.cliente || 'Sem Nome'}</strong><br />
                               <span className="text-xs text-slate-500">{pedido.cidade_bloco || ''}</span>
                               <hr className="my-1 border-slate-200" />
+                              <p className="text-xs m-0"><strong>Nº Pedido:</strong> #{pedido.id_pedido}</p>
                               <p className="text-xs m-0"><strong>Carga:</strong> {(pedido.peso_total_ton || 0).toFixed(2)} Ton</p>
                             </div>
                           </Popup>
@@ -376,7 +405,7 @@ function App() {
                 </div>
               </div>
 
-              {/* PAINEL LOGÍSTICA ATUALIZADO (GRID/LISTA PADRONIZADO E EXPANDIDO) */}
+              {/* PAINEL LOGÍSTICA ATUALIZADO */}
               <div className="bg-slate-900 p-5 rounded-xl border border-slate-800 shadow-lg w-full">
                 <div className="border-b border-slate-800 pb-3 mb-5">
                   <h2 className="text-lg font-semibold text-white">Logística LIFO Otimizada</h2>
@@ -400,7 +429,9 @@ function App() {
                                 {index + 1}º Destino
                               </span>
                               <div className="min-w-0 flex-1">
-                                <p className="text-sm font-bold text-white truncate">{pedido.cliente || 'Sem nome'}</p>
+                                <p className="text-sm font-bold text-white truncate">
+                                  #{pedido.id_pedido} - {pedido.cliente || 'Sem nome'}
+                                </p>
                                 <p className="text-xs text-slate-400 truncate mt-0.5">{pedido.cidade_bloco || ''}</p>
                               </div>
                             </div>
@@ -414,7 +445,7 @@ function App() {
                     </div>
                   </div>
                   
-                  {/* Bloco 2: Ordem de Carregamento (LIFO) -> Idêntico em estrutura, variando cor */}
+                  {/* Bloco 2: Ordem de Carregamento (LIFO) */}
                   {ordemEntregas.length > 0 && (
                     <div>
                       <span className="block text-xs font-bold text-slate-400 uppercase tracking-wider mb-3">
@@ -430,7 +461,9 @@ function App() {
                                 {index + 1}º Colocar
                               </span>
                               <div className="min-w-0 flex-1">
-                                <p className="text-sm font-bold text-white truncate">{pedido.cliente || 'Sem nome'}</p>
+                                <p className="text-sm font-bold text-white truncate">
+                                  #{pedido.id_pedido} - {pedido.cliente || 'Sem nome'}
+                                </p>
                                 <p className="text-xs text-slate-400 truncate mt-0.5">{pedido.cidade_bloco || ''}</p>
                               </div>
                             </div>
@@ -451,8 +484,33 @@ function App() {
                 <h2 className="text-xl font-bold text-white">Pedidos em Aberto sob Monitoramento</h2>
                 <p className="text-sm text-slate-400">Modifique o status dos cards para gerenciar o fluxo interno.</p>
               </div>
-              <div className="bg-amber-500/10 text-amber-400 px-4 py-2 rounded-lg border border-amber-500/20 font-semibold text-sm">
-                Total em Aberto: {pedidosEmAberto.length}
+
+              {/* SELETOR DE ORDENAÇÃO DINÂMICA */}
+              <div className="flex flex-wrap items-center gap-3">
+                <div className="flex items-center gap-2 bg-slate-950 px-3 py-1.5 rounded-lg border border-slate-800">
+                  <span className="text-xs font-medium text-slate-400">Ordenar por:</span>
+                  <select
+                    value={ordenarPor}
+                    onChange={(e) => setOrdenarPor(e.target.value)}
+                    className="bg-transparent text-xs font-bold text-white focus:outline-none cursor-pointer"
+                  >
+                    <option value="prazo" className="bg-slate-900">Prazo (Dias)</option>
+                    <option value="id_pedido" className="bg-slate-900">Nº do Pedido</option>
+                    <option value="emissao" className="bg-slate-900">Data de Emissão</option>
+                    <option value="data_entrega" className="bg-slate-900">Data de Entrega</option>
+                  </select>
+                </div>
+
+                <button
+                  onClick={() => setOrdem(ordem === 'asc' ? 'desc' : 'asc')}
+                  className="bg-slate-950 px-3 py-1.5 rounded-lg border border-slate-800 text-xs font-bold text-indigo-400 hover:border-indigo-500/50 transition-colors"
+                >
+                  {ordem === 'asc' ? '▲ Crescente' : '▼ Decrescente'}
+                </button>
+
+                <div className="bg-amber-500/10 text-amber-400 px-4 py-2 rounded-lg border border-amber-500/20 font-semibold text-sm">
+                  Total em Aberto: {pedidosEmAberto.length}
+                </div>
               </div>
             </div>
 
@@ -461,51 +519,70 @@ function App() {
                 <table className="w-full text-left border-collapse min-w-[700px]">
                   <thead>
                     <tr className="bg-slate-950 text-slate-400 text-xs font-semibold uppercase border-b border-slate-800">
-                      <th className="p-4">Cliente | Região</th>
+                      <th className="p-4">Pedido / Cliente | Região</th>
+                      <th className="p-4 text-center">Emissão</th>
+                      <th className="p-4 text-center">Itens</th>
                       <th className="p-4 text-center">Volume (Ton)</th>
-                      <th className="p-4 text-center">Prazo</th>
+                      <th className="p-4 text-center">Prazo / Entrega</th>
                       <th className="p-4 text-center w-64">Status</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-800/60 text-sm text-slate-300">
-                    {pedidosEmAberto
-                      .map((pedido) => {
-                        if (!pedido) return null;
-                        return (
-                          <tr key={pedido.id} className="hover:bg-slate-800/20 transition-colors">
-                            <td className="p-4 font-medium text-white">
-                              {pedido.cliente || 'Sem Nome'}
-                              <span className="block text-xs text-slate-400">{pedido.cidade_bloco || ''}</span>
-                            </td>
-                            <td className="p-4 text-center font-mono text-emerald-400">{(pedido.peso_total_ton || 0).toFixed(2)} t</td>
-                            <td className="p-4 text-center">
-                              {renderizarTagPrazo(pedido.dias_restantes)}
-                            </td>
-                            <td className="p-4 text-center">
-                              <div className="relative inline-block w-48 text-left group">
-                                <select
-                                  value={pedido.status || 'Pendente'}
-                                  onChange={(e) => alterarStatusPedido(pedido.id, e.target.value)}
-                                  className={`w-full appearance-none px-4 py-2 rounded-full text-xs font-bold border cursor-pointer transition-all focus:outline-none pr-8 text-center ${obterEstiloStatusCompleto(pedido.status)}`}
-                                >
-                                  <option value="Pendente" className="bg-slate-950 text-amber-400 font-semibold">Pendente</option>
-                                  <option value="Compras" className="bg-slate-950 text-sky-400 font-semibold">Compras</option>
-                                  <option value="Produção" className="bg-slate-950 text-purple-400 font-semibold">Produção</option>
-                                  <option value="Pronto" className="bg-slate-950 text-emerald-400 font-semibold">Pronto</option>
-                                </select>
-                                <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center pr-4 text-slate-400/80 group-hover:text-slate-300">
-                                  <svg className="h-3 w-3 transition-transform duration-200" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M19 9l-7 7-7-7" />
-                                  </svg>
-                                </div>
+                    {pedidosEmAberto.map((pedido) => {
+                      if (!pedido) return null;
+                      return (
+                        <tr key={pedido.id} className="hover:bg-slate-800/20 transition-colors">
+                          <td className="p-4 font-medium text-white">
+                            <div className="flex items-center gap-2">
+                              <span className="text-xs bg-slate-800 px-2 py-0.5 rounded text-indigo-300 font-mono">
+                                #{pedido.id_pedido}
+                              </span>
+                              {pedido.pedido_cliente && (
+                                <span className="text-xs bg-slate-800/60 px-2 py-0.5 rounded text-slate-400 font-mono">
+                                  Ref: {pedido.pedido_cliente}
+                                </span>
+                              )}
+                            </div>
+                            <div className="mt-1 font-bold">{pedido.cliente || 'Sem Nome'}</div>
+                            <span className="block text-xs text-slate-400">{pedido.cidade_bloco || ''}</span>
+                          </td>
+                          <td className="p-4 text-center text-xs text-slate-400">
+                            {pedido.data_emissao || '-'}
+                          </td>
+                          <td className="p-4 text-center font-mono text-slate-300">
+                            {pedido.total_itens || 0}
+                          </td>
+                          <td className="p-4 text-center font-mono text-emerald-400">
+                            {(pedido.peso_total_ton || 0).toFixed(2)} t
+                          </td>
+                          <td className="p-4 text-center">
+                            {renderizarTagPrazo(pedido.dias_restantes, pedido.data_entrega)}
+                          </td>
+                          <td className="p-4 text-center">
+                            <div className="relative inline-block w-48 text-left group">
+                              <select
+                                value={pedido.status || 'Pendente'}
+                                onChange={(e) => alterarStatusPedido(pedido.id, e.target.value)}
+                                className={`w-full appearance-none px-4 py-2 rounded-full text-xs font-bold border cursor-pointer transition-all focus:outline-none pr-8 text-center ${obterEstiloStatusCompleto(pedido.status)}`}
+                              >
+                                <option value="Pendente" className="bg-slate-950 text-amber-400 font-semibold">Pendente</option>
+                                <option value="Compras" className="bg-slate-950 text-sky-400 font-semibold">Compras</option>
+                                <option value="Produção" className="bg-slate-950 text-purple-400 font-semibold">Produção</option>
+                                <option value="Pronto" className="bg-slate-950 text-emerald-400 font-semibold">Pronto</option>
+                              </select>
+                              <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center pr-4 text-slate-400/80 group-hover:text-slate-300">
+                                <svg className="h-3 w-3 transition-transform duration-200" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M19 9l-7 7-7-7" />
+                                </svg>
                               </div>
-                            </td>
-                          </tr>
-                        );
-                      })}
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
                     {pedidosEmAberto.length === 0 && (
                       <tr>
-                        <td colSpan="4" className="p-8 text-center text-slate-500">
+                        <td colSpan="6" className="p-8 text-center text-slate-500">
                           Nenhum pedido em aberto no momento. Todos estão "Prontos" para expedição!
                         </td>
                       </tr>

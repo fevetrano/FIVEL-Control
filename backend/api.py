@@ -45,10 +45,11 @@ def obter_pedidos():
         conn = get_db_connection()
         cur = conn.cursor()
 
-        # Consulta validada: retorna todos os pedidos ativos sem NF na FISCAL
+        # Consulta com pedido do cliente e endereço fallback
         query = """
             SELECT 
                 p.ID_NUMPED AS ID_PEDIDO,
+                p.PEDIDO_CLIENTE,
                 p.EMISSAO,
                 p.DATA_ENTREGA AS PRAZO,
                 p.TOTAL_PESO AS PESO_TOTAL_PEDIDO,
@@ -57,12 +58,15 @@ def obter_pedidos():
                 c.ID_CLIENTE,
                 c.NOME AS CLIENTE_RAZAO,
                 COALESCE(c.GUERRA, c.NOME) AS CLIENTE_FANTASIA,
-                c.ENT_ENDERECO AS ENDERECO,
-                c.ENT_NUMERO AS NUMERO,
-                c.ENT_BAIRRO AS BAIRRO,
-                c.ENT_CIDADE AS CIDADE,
-                c.ENT_ID_ESTADO AS UF,
-                c.ENT_CEP AS CEP,
+                
+                -- Fallback do Endereço (se entrega for NULO, usa o principal)
+                COALESCE(NULLIF(TRIM(c.ENT_ENDERECO), ''), c.ENDERECO) AS ENDERECO,
+                COALESCE(c.ENT_NUMERO, c.NUMERO) AS NUMERO,
+                COALESCE(NULLIF(TRIM(c.ENT_BAIRRO), ''), c.BAIRRO) AS BAIRRO,
+                COALESCE(NULLIF(TRIM(c.ENT_CIDADE), ''), c.CIDADE) AS CIDADE,
+                COALESCE(NULLIF(TRIM(c.ENT_ID_ESTADO), ''), c.ID_ESTADO) AS UF,
+                COALESCE(NULLIF(TRIM(c.ENT_CEP), ''), c.CEP) AS CEP,
+                
                 i.ID_PRODUTO,
                 i.QUANT AS QUANTIDADE,
                 i.COMP AS COMPRIMENTO,
@@ -75,10 +79,11 @@ def obter_pedidos():
             FROM PEDIDOS p
             LEFT JOIN CLIENTES c ON p.ID_CLIENTE = c.ID_CLIENTE
             LEFT JOIN PEDITEM i ON p.ID_NUMPED = i.ID_NUMPED
-            WHERE NOT EXISTS (
-                SELECT 1 FROM FISCAL f WHERE f.ID_NUMPED = p.ID_NUMPED
-            )
-            ORDER BY p.DATA_ENTREGA ASC;
+            WHERE p.EMISSAO >= '2026-05-01'
+              AND NOT EXISTS (
+                  SELECT 1 FROM FISCAL f WHERE f.ID_NUMPED = p.ID_NUMPED
+              )
+            ORDER BY p.ID_NUMPED DESC;
         """
 
         cur.execute(query)
@@ -108,9 +113,20 @@ def obter_pedidos():
             id_ped = str(row["id_pedido"])
 
             if id_ped not in pedidos_map:
+                dt_emissao = row.get("emissao")
+                data_emissao_formatada = ""
+                if dt_emissao:
+                    try:
+                        if isinstance(dt_emissao, datetime):
+                            data_emissao_formatada = dt_emissao.strftime("%d/%m/%Y")
+                        else:
+                            data_emissao_formatada = dt_emissao.strftime("%d/%m/%Y")
+                    except Exception:
+                        data_emissao_formatada = str(dt_emissao)
+
                 dt_entrega = row.get("prazo")
                 data_entrega_formatada = ""
-                dias_restantes = None
+                dias_restantes = 999999  # Valor alto padrao caso nao tenha prazo para ordenacao facil
 
                 if dt_entrega:
                     try:
@@ -122,7 +138,7 @@ def obter_pedidos():
                         data_entrega_formatada = dt_entrega_date.strftime("%d/%m/%Y")
                         dias_restantes = (dt_entrega_date - hoje).days
                     except Exception:
-                        dias_restantes = None
+                        pass
 
                 peso_tot_kg = (
                     float(row["peso_total_pedido"])
@@ -139,13 +155,17 @@ def obter_pedidos():
 
                 cidade = limpar_texto(row.get("cidade"))
                 end = limpar_texto(row.get("endereco"))
-                num = limpar_texto(row.get("numero"))
+                num = str(row.get("numero")) if row.get("numero") is not None else ""
                 bairro = limpar_texto(row.get("bairro"))
 
-                endereco_comp = f"{end}, {num} - {bairro}".strip(", -")
+                # Monta a string do endereço completo
+                partes_endereco = [p for p in [end, num, bairro] if p]
+                endereco_comp = ", ".join(partes_endereco)
 
                 pedidos_map[id_ped] = {
                     "id": id_ped,
+                    "id_pedido": int(id_ped),
+                    "pedido_cliente": limpar_texto(row.get("pedido_cliente")),
                     "cliente": cliente_nome,
                     "razao_social": cliente_razao,
                     "cidade_bloco": cidade,
@@ -154,10 +174,16 @@ def obter_pedidos():
                     "peso_total_kg": round(peso_tot_kg, 2),
                     "peso_total_ton": round(peso_tot_kg / 1000, 2),
                     "faturamento_total": round(faturamento_tot, 2),
+                    "data_emissao": data_emissao_formatada,
+                    "raw_emissao": str(dt_emissao) if dt_emissao else "",
                     "data_entrega": data_entrega_formatada,
-                    "dias_restantes": dias_restantes,
+                    "raw_entrega": str(dt_entrega) if dt_entrega else "",
+                    "dias_restantes": (
+                        dias_restantes if dias_restantes != 999999 else None
+                    ),
                     "latitude": -23.6939,
                     "longitude": -46.5650,
+                    "total_itens": 0,
                     "itens": [],
                 }
 
@@ -181,8 +207,31 @@ def obter_pedidos():
                         ),
                     }
                 )
+                pedidos_map[id_ped]["total_itens"] = len(pedidos_map[id_ped]["itens"])
 
         lista_pedidos = list(pedidos_map.values())
+
+        # --- ORDENAÇÃO DINÂMICA VIA PARÂMETROS DA URL ---
+        # Exemplo: /api/pedidos?ordenar_por=data_entrega&ordem=asc
+        ordenar_por = request.args.get("ordenar_por", "id_pedido").lower()
+        ordem = request.args.get("ordem", "desc").lower()
+
+        reverse_bool = ordem == "desc"
+
+        if ordenar_por in ["id_pedido", "id", "numero"]:
+            lista_pedidos.sort(key=lambda x: x["id_pedido"], reverse=reverse_bool)
+        elif ordenar_por in ["emissao", "data_emissao"]:
+            lista_pedidos.sort(key=lambda x: x["raw_emissao"], reverse=reverse_bool)
+        elif ordenar_por in ["data_entrega", "entrega"]:
+            lista_pedidos.sort(key=lambda x: x["raw_entrega"], reverse=reverse_bool)
+        elif ordenar_por in ["prazo", "dias_restantes"]:
+            lista_pedidos.sort(
+                key=lambda x: (
+                    x["dias_restantes"] if x["dias_restantes"] is not None else 999999
+                ),
+                reverse=reverse_bool,
+            )
+
         return jsonify(lista_pedidos), 200
 
     except Exception as e:
