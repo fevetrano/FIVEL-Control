@@ -179,7 +179,7 @@ def obter_pedidos():
                 partes_endereco = [p for p in [end, num, bairro] if p]
                 endereco_comp = ", ".join(partes_endereco)
 
-                # Mapeia KANBAN (Letra) -> Frontend Status (Apenas: Pendente, Compras, Produção, Pronto)
+                # Mapeia KANBAN (Letra) -> Frontend Status
                 status_bruto = limpar_texto(row.get("status_kanban")).upper()
                 if status_bruto == "P":
                     status_frontend = "Pronto"
@@ -218,9 +218,7 @@ def obter_pedidos():
             if row.get("id_produto"):
                 pedidos_map[id_ped]["itens"].append(
                     {
-                        "id_numof": row.get(
-                            "id_numof"
-                        ),  # Número serial real da OF (ex: 29206)
+                        "id_numof": row.get("id_numof"),  # Número serial real da OF
                         "id_produto": limpar_texto(row["id_produto"]),
                         "referencia": limpar_texto(row.get("referencia")),
                         "quantidade": float(row.get("quantidade") or 0.0),
@@ -266,6 +264,114 @@ def obter_pedidos():
         print("=" * 50 + "\n")
         return jsonify({"erro": f"Erro ao consultar Firebird: {str(e)}"}), 500
 
+    finally:
+        if conn:
+            conn.close()
+
+
+# --- NOVAS ROTAS DE INDICADORES DA TELA GERAL E MAPA ---
+@app.route("/api/resumo/mapa", methods=["GET"])
+def obter_resumo_mapa():
+    conn = None
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+
+        # 1. Faturamento Pronto e Peso Pronto (Pedidos ativos que estão com KANBAN = 'P')
+        query_prontos = """
+            SELECT 
+                COALESCE(SUM(p.TOTAL_GERAL), 0) AS FATURAMENTO_PRONTO,
+                COALESCE(SUM(p.TOTAL_PESO), 0) AS PESO_PRONTO_KG
+            FROM PEDIDOS p
+            WHERE p.EMISSAO >= '2026-07-01'
+              AND p.KANBAN = 'P'
+              AND NOT EXISTS (
+                  SELECT 1 FROM FISCAL f WHERE f.ID_NUMPED = p.ID_NUMPED
+              )
+        """
+        cur.execute(query_prontos)
+        res_prontos = cur.fetchone()
+        faturamento_pronto = float(res_prontos[0] or 0.0)
+        peso_pronto_kg = float(res_prontos[1] or 0.0)
+
+        # 2. Peso total entregue no mês atual (Tabela FISCAL)
+        hoje = datetime.now()
+        primeiro_dia_mes = hoje.replace(day=1).strftime("%Y-%m-%d")
+
+        query_entregue_mes = """
+            SELECT COALESCE(SUM(f.OI_LIQUI), 0) AS PESO_ENTREGUE_MES_KG
+            FROM FISCAL f
+            WHERE f.EMISSAO >= ?
+              AND (f.CANCELADA IS NULL OR f.CANCELADA <> 'S')
+        """
+        cur.execute(query_entregue_mes, (primeiro_dia_mes,))
+        res_entregue = cur.fetchone()
+        peso_entregue_mes_kg = float(res_entregue[0] or 0.0)
+
+        return (
+            jsonify(
+                {
+                    "faturamento_pronto": round(faturamento_pronto, 2),
+                    "peso_pronto_kg": round(peso_pronto_kg, 2),
+                    "peso_pronto_ton": round(peso_pronto_kg / 1000, 2),
+                    "peso_entregue_mes_kg": round(peso_entregue_mes_kg, 2),
+                    "peso_entregue_mes_ton": round(peso_entregue_mes_kg / 1000, 2),
+                }
+            ),
+            200,
+        )
+
+    except Exception as e:
+        print("ERRO AO GERAR RESUMO DO MAPA:", str(e))
+        traceback.print_exc()
+        return jsonify({"erro": f"Erro ao consultar Firebird: {str(e)}"}), 500
+    finally:
+        if conn:
+            conn.close()
+
+
+# --- ROTAS DE INDICADORES DA TELA DE PEDIDOS ---
+@app.route("/api/resumo/pedidos", methods=["GET"])
+def obter_resumo_pedidos():
+    conn = None
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+
+        query = """
+            SELECT 
+                COALESCE(SUM(p.TOTAL_GERAL), 0) AS FATURAMENTO_ACUMULADO,
+                COALESCE(SUM(p.TOTAL_PESO), 0) AS PESO_TOTAL_KG,
+                COUNT(p.ID_NUMPED) AS PEDIDOS_ATIVOS
+            FROM PEDIDOS p
+            WHERE p.EMISSAO >= '2026-07-01'
+              AND NOT EXISTS (
+                  SELECT 1 FROM FISCAL f WHERE f.ID_NUMPED = p.ID_NUMPED
+              )
+        """
+        cur.execute(query)
+        res = cur.fetchone()
+
+        fat_acumulado = float(res[0] or 0.0)
+        peso_total_kg = float(res[1] or 0.0)
+        pedidos_ativos = int(res[2] or 0)
+
+        return (
+            jsonify(
+                {
+                    "faturamento_acumulado": round(fat_acumulado, 2),
+                    "volume_carga_total_kg": round(peso_total_kg, 2),
+                    "volume_carga_total_ton": round(peso_total_kg / 1000, 2),
+                    "pedidos_ativos": pedidos_ativos,
+                }
+            ),
+            200,
+        )
+
+    except Exception as e:
+        print("ERRO AO GERAR RESUMO DE PEDIDOS:", str(e))
+        traceback.print_exc()
+        return jsonify({"erro": f"Erro ao consultar Firebird: {str(e)}"}), 500
     finally:
         if conn:
             conn.close()
