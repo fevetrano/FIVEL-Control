@@ -16,7 +16,6 @@ L.Marker.prototype.options.icon = DefaultIcon;
 
 const COORDENADAS_EMPRESA = [-23.6939, -46.5650]
 
-// Componente para corrigir a renderização do Leaflet ao trocar de aba
 function RedimensionarMapa() {
   const map = useMap();
   useEffect(() => {
@@ -29,14 +28,15 @@ function RedimensionarMapa() {
 
 function App() {
   const [pedidos, setPedidos] = useState([])
+  const [compras, setCompras] = useState([])
   const [carregando, setCarregando] = useState(true)
-  const [abaAtiva, setAbaAtiva] = useState('mapa') 
+  const [abaAtiva, setAbaAtiva] = useState('prazos') 
+  
   const [pedidosSelecionados, setPedidosSelecionados] = useState([]) 
   const [rotaIdaGeometria, setRotaIdaGeometria] = useState([]) 
   const [rotaVoltaGeometria, setRotaVoltaGeometria] = useState([]) 
   const [ordemEntregas, setOrdemEntregas] = useState([]) 
 
-  // ESTADOS PARA OS SUMÁRIOS DAS APIS
   const [resumoPedidos, setResumoPedidos] = useState({
     faturamento_acumulado: 0,
     volume_carga_total_kg: 0,
@@ -46,28 +46,45 @@ function App() {
   const [resumoMapa, setResumoMapa] = useState({
     faturamento_pronto: 0,
     peso_pronto_kg: 0,
-    peso_entregue_mes_kg: 30965
+    peso_entregue_mes_kg: 0
   })
 
-  // ESTADOS DE ORDENAÇÃO E EXIBIÇÃO
+  const [dadosDashboard, setDadosDashboard] = useState({
+    faturamento_mes: 0,
+    peso_mes_kg: 0,
+    total_nfs_mes: 0,
+    faturamento_carteira: 0,
+    peso_carteira_kg: 0,
+    total_pedidos_carteira: 0,
+    distribuicao_kanban: { Pendente: 0, Compras: 0, Produção: 0, Pronto: 0 },
+    mes_referencia: ''
+  })
+
   const [ordenarPor, setOrdenarPor] = useState('prazo') 
   const [ordem, setOrdem] = useState('asc') 
-  const [modoExibicao, setModoExibicao] = useState('lista') // 'lista' ou 'grade'
+  const [modoExibicao, setModoExibicao] = useState('lista') 
 
-  // ESTADOS PARA EXPANSÃO DE PEDIDOS E STATUS INDIVIDUAL DE OFs (EM MEMÓRIA)
   const [pedidosExpandidos, setPedidosExpandidos] = useState([])
-  const [statusOfs, setStatusOfs] = useState({})
+  const [comprasExpandidas, setComprasExpandidas] = useState([])
 
   const abortControllerOSRM = useRef(null)
+  const bloqueioPollingRef = useRef(false);
 
-  // FUNÇÃO AUXILIAR PARA FORMATAR PESO EM KG (INTEIRO)
+  const pausarPollingTemporariamente = () => {
+    bloqueioPollingRef.current = true;
+    setTimeout(() => {
+      bloqueioPollingRef.current = false;
+    }, 5000);
+  };
+
   const formatarKg = (valor) => {
     if (!valor || isNaN(valor)) return '0'
     return Math.round(valor).toLocaleString('pt-BR')
   }
 
-  // FUNÇÃO PARA BUSCAR PEDIDOS
   const carregarPedidos = useCallback((silencioso = false) => {
+    if (silencioso && bloqueioPollingRef.current) return;
+
     if (!silencioso) setCarregando(true)
     axios.get(`http://localhost:5000/api/pedidos?ordenar_por=${ordenarPor}&ordem=${ordem}`)
       .then(response => {
@@ -80,12 +97,24 @@ function App() {
       })
   }, [ordenarPor, ordem])
 
-  // FUNÇÃO PARA BUSCAR OS RESUMOS/INDICADORES DAS DUAS TELAS
+  const carregarCompras = useCallback((silencioso = false) => {
+    if (silencioso && bloqueioPollingRef.current) return;
+
+    axios.get(`http://localhost:5000/api/compras`)
+      .then(response => {
+        setCompras(Array.isArray(response.data) ? response.data : [])
+      })
+      .catch(error => {
+        console.error("Erro ao buscar compras da API:", error)
+      })
+  }, [])
+
   const carregarResumos = useCallback(() => {
     Promise.all([
       axios.get('http://localhost:5000/api/resumo/pedidos'),
-      axios.get('http://localhost:5000/api/resumo/mapa')
-    ]).then(([resPedidos, resMapa]) => {
+      axios.get('http://localhost:5000/api/resumo/mapa'),
+      axios.get('http://localhost:5000/api/resumo/dashboard')
+    ]).then(([resPedidos, resMapa, resDash]) => {
       const dadosPedidos = resPedidos.data || {}
       const dadosMapa = resMapa.data || {}
 
@@ -97,8 +126,12 @@ function App() {
       setResumoMapa({
         ...dadosMapa,
         peso_pronto_kg: dadosMapa.peso_pronto_kg ?? ((dadosMapa.peso_pronto_ton || 0) * 1000),
-        peso_entregue_mes_kg: 30965
+        peso_entregue_mes_kg: dadosMapa.peso_entregue_mes_kg ?? ((dadosMapa.peso_entregue_mes_ton || 0) * 1000)
       })
+
+      if (resDash.data) {
+        setDadosDashboard(resDash.data)
+      }
     }).catch(error => {
       console.error("Erro ao carregar indicadores de resumo:", error)
     })
@@ -106,15 +139,17 @@ function App() {
 
   useEffect(() => {
     carregarPedidos()
+    carregarCompras()
     carregarResumos()
 
     const intervalId = setInterval(() => {
       carregarPedidos(true)
+      carregarCompras(true)
       carregarResumos()
     }, 5000)
 
     return () => clearInterval(intervalId)
-  }, [carregarPedidos, carregarResumos])
+  }, [carregarPedidos, carregarCompras, carregarResumos])
 
   const calcularDistancia = (coord1, coord2) => {
     if (!coord1 || !coord2) return 0;
@@ -128,7 +163,7 @@ function App() {
     return R * c;
   }
 
-  const calcularRotaOtimizada = useCallback(async (idsSelecionados) => {
+  const calcularRotaOtimizada = useCallback(async (idsSelecionados, listaPedidos) => {
     if (!idsSelecionados || idsSelecionados.length === 0) {
       setRotaIdaGeometria([]);
       setRotaVoltaGeometria([]);
@@ -136,7 +171,7 @@ function App() {
       return;
     }
 
-    const pedidosParaRota = pedidos.filter(p => p && idsSelecionados.includes(p.id) && p.latitude && p.longitude);
+    const pedidosParaRota = (listaPedidos || pedidos).filter(p => p && idsSelecionados.includes(p.id) && p.latitude && p.longitude);
 
     if (pedidosParaRota.length === 0) {
       setRotaIdaGeometria([]);
@@ -210,15 +245,21 @@ function App() {
     }
   }, [pedidos]);
 
+  useEffect(() => {
+    calcularRotaOtimizada(pedidosSelecionados, pedidos);
+  }, [pedidosSelecionados, pedidos, calcularRotaOtimizada]);
+
   const alterarStatusPedido = (id, novoStatus) => {
+    pausarPollingTemporariamente();
+
     setPedidos(prevPedidos => 
       prevPedidos.map(p => p.id === id ? { ...p, status: novoStatus } : p)
-    )
+    );
 
-    if (novoStatus !== 'Pronto') {
-      const novaSelecao = pedidosSelecionados.filter(item => item !== id);
-      setPedidosSelecionados(novaSelecao);
-      calcularRotaOtimizada(novaSelecao);
+    if (novoStatus === 'Pronto') {
+      setPedidosSelecionados(prev => prev.includes(id) ? prev : [...prev, id]);
+    } else {
+      setPedidosSelecionados(prev => prev.filter(item => item !== id));
     }
 
     axios.put(`http://localhost:5000/api/pedidos/${id}/status`, { status: novoStatus })
@@ -229,56 +270,78 @@ function App() {
       });
   }
 
-  const toggleSelecaoPedido = (pedido) => {
-    if (!pedido) return;
-    let novaSelecao;
-    if (pedidosSelecionados.includes(pedido.id)) {
-      novaSelecao = pedidosSelecionados.filter(item => item !== pedido.id);
-    } else {
-      novaSelecao = [...pedidosSelecionados, pedido.id];
-    }
-    setPedidosSelecionados(novaSelecao);
-    calcularRotaOtimizada(novaSelecao);
+  const darBaixaCompra = (idCompra) => {
+    pausarPollingTemporariamente();
+    
+    setCompras(prev => prev.map(c => c.idCompra === idCompra ? { ...c, status: 'RECEBIDA', dataRecebida: new Date().toLocaleDateString('pt-BR') } : c));
+
+    axios.put(`http://localhost:5000/api/compras/${idCompra}/baixa`)
+      .then(() => {
+        carregarCompras(true);
+        carregarPedidos(true); 
+        carregarResumos();
+      })
+      .catch(error => {
+        console.error("Erro ao dar baixa na compra:", error);
+        carregarCompras(true);
+      });
   }
 
-  // --- LÓGICA DE EXPANSÃO DE PEDIDOS E STATUS DE OFs ---
+  const toggleSelecaoPedido = (pedido) => {
+    if (!pedido) return;
+    setPedidosSelecionados(prev => 
+      prev.includes(pedido.id) ? prev.filter(id => id !== pedido.id) : [...prev, pedido.id]
+    );
+  }
+
   const toggleExpandirPedido = (idPedido) => {
     setPedidosExpandidos(prev => 
       prev.includes(idPedido) ? prev.filter(id => id !== idPedido) : [...prev, idPedido]
     )
   }
 
-  const alternarStatusOf = (idPedido, indexItem, totalItens) => {
-    const chave = `${idPedido}-${indexItem}`
-    const novoStatusOf = statusOfs[chave] === 'Concluido' ? 'Pendente' : 'Concluido'
-
-    const novosStatus = {
-      ...statusOfs,
-      [chave]: novoStatusOf
-    }
-    setStatusOfs(novosStatus)
-
-    let concluidasCount = 0
-    for (let i = 0; i < totalItens; i++) {
-      if (novosStatus[`${idPedido}-${i}`] === 'Concluido') {
-        concluidasCount++
-      }
-    }
-
-    if (totalItens > 0 && concluidasCount === totalItens) {
-      alterarStatusPedido(idPedido, 'Pronto')
-    }
+  const toggleExpandirCompra = (idCompra) => {
+    setComprasExpandidas(prev => 
+      prev.includes(idCompra) ? prev.filter(id => id !== idCompra) : [...prev, idCompra]
+    )
   }
+
+  const alternarStatusOf = (idPedido, idOf, novoStatus) => {
+    pausarPollingTemporariamente();
+
+    setPedidos(prevPedidos => {
+      return prevPedidos.map(p => {
+        if (p.id === idPedido) {
+          const novosItens = p.itens.map(item => {
+            if(item.id_numof === idOf) {
+               return { ...item, statusOF: novoStatus, concluido: novoStatus === "Pronto" }
+            }
+            return item;
+          });
+          const todasConcluidas = novosItens.every(i => i.concluido)
+          return { ...p, itens: novosItens, status: todasConcluidas ? 'Pronto' : 'Pendente' }
+        }
+        return p
+      })
+    })
+
+    axios.put(`http://localhost:5000/api/pedidos/${idPedido}/itens/${idOf}/status`, { status: novoStatus })
+    .then(() => carregarResumos())
+    .catch(error => {
+      console.error("Erro ao persistir status da OF no banco:", error)
+      carregarPedidos(true)
+    })
+  }
+
+  const alterarAba = (novaAba) => {
+    pausarPollingTemporariamente();
+    setAbaAtiva(novaAba);
+  };
 
   const obterContadorOfs = (pedido) => {
     if (!pedido || !pedido.itens) return { concluidas: 0, total: 0 }
     const total = pedido.itens.length
-    let concluidas = 0
-    for (let i = 0; i < total; i++) {
-      if (statusOfs[`${pedido.id}-${i}`] === 'Concluido') {
-        concluidas++
-      }
-    }
+    const concluidas = pedido.itens.filter(i => i.concluido).length
     return { concluidas, total }
   }
 
@@ -322,12 +385,12 @@ function App() {
 
   const obterEstiloStatusCompleto = (status) => {
     const estilos = {
-      'Pendente': 'bg-amber-500/10 text-amber-400 border-amber-500/30 hover:border-amber-500/50',
-      'Compras': 'bg-sky-500/10 text-sky-400 border-sky-500/30 hover:border-sky-500/50',
-      'Produção': 'bg-purple-500/10 text-purple-400 border-purple-500/30 hover:border-purple-500/50',
-      'Pronto': 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30 hover:border-emerald-500/50'
+      'Pendente': 'bg-amber-500/10 text-amber-400 border-amber-500/30',
+      'Compras': 'bg-sky-500/10 text-sky-400 border-sky-500/30',
+      'Produção': 'bg-purple-500/10 text-purple-400 border-purple-500/30',
+      'Pronto': 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30'
     }
-    return estilos[status] || 'bg-slate-800 text-slate-300 border-slate-700 hover:border-slate-600'
+    return estilos[status] || 'bg-slate-800 text-slate-300 border-slate-700'
   }
 
   return (
@@ -346,27 +409,367 @@ function App() {
       </header>
 
       {/* SELETOR DE ABAS */}
-      <div className="w-full mx-auto mb-8 flex gap-2 border-b border-slate-900 pb-px">
+      <div className="w-full mx-auto mb-8 flex gap-2 border-b border-slate-900 pb-px overflow-x-auto">
         <button
-          onClick={() => setAbaAtiva('mapa')}
-          className={`pb-3 px-4 font-medium text-sm transition-colors relative ${abaAtiva === 'mapa' ? 'text-indigo-400 border-b-2 border-indigo-400' : 'text-slate-400 hover:text-white'}`}
+          onClick={() => alterarAba('mapa')}
+          className={`pb-3 px-4 font-medium text-sm transition-colors relative whitespace-nowrap ${abaAtiva === 'mapa' ? 'text-indigo-400 border-b-2 border-indigo-400' : 'text-slate-400 hover:text-white'}`}
         >
           Geral e Mapa
         </button>
         <button
-          onClick={() => setAbaAtiva('prazos')}
-          className={`pb-3 px-4 font-medium text-sm transition-colors relative ${abaAtiva === 'prazos' ? 'text-indigo-400 border-b-2 border-indigo-400' : 'text-slate-400 hover:text-white'}`}
+          onClick={() => alterarAba('prazos')}
+          className={`pb-3 px-4 font-medium text-sm transition-colors relative whitespace-nowrap ${abaAtiva === 'prazos' ? 'text-indigo-400 border-b-2 border-indigo-400' : 'text-slate-400 hover:text-white'}`}
         >
-          Controle de Pedidos em Aberto
+          Pedidos em Aberto
+        </button>
+        <button
+          onClick={() => alterarAba('compras')}
+          className={`pb-3 px-4 font-medium text-sm transition-colors relative whitespace-nowrap ${abaAtiva === 'compras' ? 'text-indigo-400 border-b-2 border-indigo-400' : 'text-slate-400 hover:text-white'}`}
+        >
+          Gestão de Compras
+        </button>
+        <button
+          onClick={() => alterarAba('dashboard')}
+          className={`pb-3 px-4 font-medium text-sm transition-colors relative whitespace-nowrap ${abaAtiva === 'dashboard' ? 'text-indigo-400 border-b-2 border-indigo-400' : 'text-slate-400 hover:text-white'}`}
+        >
+          Dashboard
         </button>
       </div>
 
       <main className="w-full mx-auto">
-        {abaAtiva === 'mapa' ? (
+
+        {/* ABA: COMPRAS */}
+        {abaAtiva === 'compras' && (
+          <div className="space-y-6 w-full">
+            <div className="flex justify-between items-center border-b border-slate-800 pb-3">
+              <div>
+                 <h2 className="text-xl font-bold text-white">Compras (Chapas)</h2>
+                 <p className="text-xs text-slate-400">Controle de recebimento de matéria-prima e vínculo de OFs</p>
+              </div>
+              <button 
+                onClick={() => carregarCompras(false)} 
+                className="bg-slate-900 border border-slate-700 text-slate-300 hover:text-white px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors"
+              >
+                Atualizar Compras
+              </button>
+            </div>
+            
+            <div className="grid grid-cols-1 gap-4">
+              {compras.map(compra => {
+                 const isExpanded = comprasExpandidas.includes(compra.idCompra);
+                 
+                 let todosClientes = [];
+                 if(compra.itens) {
+                   compra.itens.forEach(item => {
+                      if(item.ofs) {
+                        item.ofs.forEach(of => {
+                            if(of.cliente) todosClientes.push(of.cliente);
+                        });
+                      }
+                   });
+                 }
+                 const clientesUnicos = [...new Set(todosClientes)].join(", ");
+                 
+                 const isRecebida = compra.dataRecebida || compra.status === 'RECEBIDA';
+                 
+                 return (
+                   <div key={compra.idCompra} className="bg-slate-950 border border-slate-800 rounded-xl overflow-hidden shadow-lg transition-all hover:border-slate-700">
+                     <div 
+                        className="p-4 flex flex-col md:flex-row justify-between items-start md:items-center gap-4 cursor-pointer hover:bg-slate-900/40 transition-colors" 
+                        onClick={() => toggleExpandirCompra(compra.idCompra)}
+                     >
+                       <div className="flex-1 min-w-[250px]">
+                         <div className="flex items-center gap-2 mb-1">
+                            <span className="text-xs font-mono font-bold bg-indigo-500/10 text-indigo-400 px-2 py-0.5 rounded border border-indigo-500/20">
+                              OC: {compra.idCompra}
+                            </span>
+                            <span className={`text-[10px] px-2 py-0.5 rounded font-bold uppercase border ${!isRecebida ? 'bg-amber-500/10 text-amber-400 border-amber-500/30' : 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30'}`}>
+                              {!isRecebida ? 'Em Compras' : 'Recebida'}
+                            </span>
+                         </div>
+                         <h3 className="font-bold text-white text-base leading-tight mt-1.5">{compra.fornecedor || 'Fornecedor Não Informado'}</h3>
+                       </div>
+                       
+                       <div className="flex flex-wrap items-center gap-6 text-xs text-slate-300 w-full md:w-auto justify-between md:justify-end border-t md:border-t-0 pt-3 md:pt-0 border-slate-800/60">
+                         <div className="text-left md:text-center">
+                           <span className="block text-[10px] text-slate-500 uppercase">Emissão</span>
+                           <span className="font-mono">{compra.dataEmissao || '-'}</span>
+                         </div>
+                         <div className="text-left md:text-center">
+                           <span className="block text-[10px] text-slate-500 uppercase">Previsão</span>
+                           <span className="font-mono">{compra.dataPrevisao || '-'}</span>
+                         </div>
+                         <div className="text-left md:text-center">
+                           <span className="block text-[10px] text-slate-500 uppercase">Peso Total</span>
+                           <span className="font-mono font-semibold text-sky-400">{formatarKg(compra.pesoTotalKg)} kg</span>
+                         </div>
+                         <div className="text-left md:text-center">
+                           <span className="block text-[10px] text-slate-500 uppercase">Valor Total</span>
+                           <span className="font-mono font-semibold text-emerald-400">R$ {(compra.valorTotal || 0).toLocaleString('pt-BR', {minimumFractionDigits: 2})}</span>
+                         </div>
+                         
+                         <div className="pl-4 border-l border-slate-800 flex items-center justify-end min-w-[140px]">
+                            {!isRecebida ? (
+                              <button 
+                                onClick={(e) => { e.stopPropagation(); darBaixaCompra(compra.idCompra); }} 
+                                className="bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold px-4 py-2 rounded-lg shadow-lg transition-all transform hover:scale-105 w-full"
+                              >
+                                Dar Baixa (Receber NF)
+                              </button>
+                            ) : (
+                              <div className="text-[11px] text-slate-500 font-semibold flex flex-col items-end w-full">
+                                <span className="text-emerald-500 flex items-center gap-1">
+                                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7" /></svg>
+                                  Baixa Realizada
+                                </span>
+                                <span>{compra.dataRecebida}</span>
+                              </div>
+                            )}
+                         </div>
+                       </div>
+                     </div>
+                     
+                     <div className="px-4 py-2.5 bg-slate-900/60 border-t border-slate-800/80 text-xs flex justify-between items-center text-slate-400">
+                        <span className="truncate pr-4"><strong>Cliente(s):</strong> {clientesUnicos || '-'}</span>
+                     </div>
+                     
+                     {isExpanded && (
+                       <div className="bg-slate-900/90 p-4 border-t border-slate-800/80">
+                         <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3">
+                           Itens da Compra e OFs Vinculadas
+                         </h4>
+                         {compra.itens && compra.itens.length > 0 ? (
+                           <div className="overflow-x-auto">
+                             <table className="w-full text-left border-collapse text-xs">
+                               <thead>
+                                 <tr className="border-b border-slate-800 text-slate-500 uppercase font-mono">
+                                   <th className="py-2 px-3">OF (Nº Serial)</th>
+                                   <th className="py-2 px-3">Referência</th>
+                                   <th className="py-2 px-3 text-center">Quantidade OF</th>
+                                   <th className="py-2 px-3 text-center">Qtd Chapas</th>
+                                   <th className="py-2 px-3 text-right">Valor Total Item</th>
+                                   <th className="py-2 px-3 text-right">Peso Item</th>
+                                   <th className="py-2 px-3 text-center">Fechamento</th>
+                                   <th className="py-2 px-3 text-center">Status OF</th>
+                                 </tr>
+                               </thead>
+                               <tbody className="divide-y divide-slate-800/50 text-slate-300">
+                                 {compra.itens.map((itemGroup, idxGroup) => {
+                                   
+                                   if (!itemGroup.ofs || itemGroup.ofs.length === 0) {
+                                     return (
+                                       <tr key={`item-${idxGroup}`} className="hover:bg-slate-800/40 transition-colors">
+                                          <td className="py-2.5 px-3 font-mono font-bold text-slate-500">-</td>
+                                          <td className="py-2.5 px-3 font-medium text-slate-400">Item sem OF: {itemGroup.item}</td>
+                                          <td className="py-2.5 px-3 text-center font-mono">-</td>
+                                          <td className="py-2.5 px-3 text-center font-mono">{itemGroup.quantidadeChapa}</td>
+                                          <td className="py-2.5 px-3 text-right font-mono">R$ {itemGroup.vltot.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</td>
+                                          <td className="py-2.5 px-3 text-right font-mono text-emerald-400">{formatarKg(itemGroup.pesoChapa)} kg</td>
+                                          <td className="py-2.5 px-3 text-center font-mono text-slate-400">-</td>
+                                          <td className="py-2.5 px-3 text-center">-</td>
+                                       </tr>
+                                     )
+                                   }
+
+                                   return itemGroup.ofs.map((of, idxOf) => (
+                                     <tr key={`of-${idxGroup}-${idxOf}`} className="hover:bg-slate-800/40 transition-colors">
+                                       <td className="py-2.5 px-3 font-mono font-bold text-indigo-300">
+                                         OF {of.idOF}
+                                       </td>
+                                       <td className="py-2.5 px-3 font-medium text-white">
+                                         {of.referencia || itemGroup.item}
+                                       </td>
+                                       <td className="py-2.5 px-3 text-center font-mono">
+                                         {of.quantOF}
+                                       </td>
+                                       <td className="py-2.5 px-3 text-center font-mono text-slate-400">
+                                         {idxOf === 0 ? itemGroup.quantidadeChapa : '—'}
+                                       </td>
+                                       <td className="py-2.5 px-3 text-right font-mono">
+                                         {idxOf === 0 ? `R$ ${itemGroup.vltot.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}` : '—'}
+                                       </td>
+                                       <td className="py-2.5 px-3 text-right font-mono text-emerald-400">
+                                         {idxOf === 0 ? `${formatarKg(itemGroup.pesoChapa)} kg` : '—'}
+                                       </td>
+                                       <td className="py-2.5 px-3 text-center font-mono text-slate-400">
+                                         {of.fechamento || '-'}
+                                       </td>
+                                       <td className="py-2.5 px-3 text-center">
+                                          <span className={`px-2.5 py-1 rounded-full text-[11px] font-semibold border ${obterEstiloStatusCompleto(of.statusOF)}`}>
+                                            {of.statusOF}
+                                          </span>
+                                       </td>
+                                     </tr>
+                                   ))
+                                 })}
+                               </tbody>
+                             </table>
+                           </div>
+                         ) : (
+                           <div className="text-xs text-slate-500 italic p-2 text-center">
+                             Nenhum item detalhado encontrado para esta compra.
+                           </div>
+                         )}
+                       </div>
+                     )}
+                   </div>
+                 )
+              })}
+
+              {compras.length === 0 && !carregando && (
+                <div className="p-8 text-center text-slate-500 bg-slate-950/50 rounded-xl border border-slate-800">
+                  Nenhuma ordem de compra em aberto encontrada a partir do ID 1863.
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* ABA: DASHBOARD & ANALYTICS */}
+        {abaAtiva === 'dashboard' && (
+          <div className="space-y-6 w-full">
+            <div className="flex justify-between items-center border-b border-slate-800 pb-3">
+              <h2 className="text-xl font-bold text-white">Indicadores Operacionais e Faturamento</h2>
+              <span className="text-xs text-indigo-400 bg-indigo-500/10 border border-indigo-500/20 px-3 py-1 rounded-full font-mono">
+                Mês de Referência: {dadosDashboard.mes_referencia}
+              </span>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+              <div className="bg-slate-900 p-6 rounded-xl border border-slate-800 shadow-lg relative overflow-hidden">
+                <div className="absolute top-0 right-0 w-2 h-full bg-emerald-500"></div>
+                <p className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-1">Faturamento Faturado (Mês)</p>
+                <p className="text-3xl font-extrabold text-emerald-400">
+                  R$ {(dadosDashboard.faturamento_mes || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                </p>
+                <p className="text-xs text-slate-500 mt-2">Baseado nas Notas Fiscais emitidas</p>
+              </div>
+
+              <div className="bg-slate-900 p-6 rounded-xl border border-slate-800 shadow-lg relative overflow-hidden">
+                <div className="absolute top-0 right-0 w-2 h-full bg-sky-500"></div>
+                <p className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-1">Peso Expedido (Mês)</p>
+                <p className="text-3xl font-extrabold text-sky-400">
+                  {formatarKg(dadosDashboard.peso_mes_kg)} <span className="text-lg font-normal text-slate-400">kg</span>
+                </p>
+                <p className="text-xs text-slate-500 mt-2">Equivalente a {((dadosDashboard.peso_mes_kg || 0) / 1000).toFixed(2)} toneladas</p>
+              </div>
+
+              <div className="bg-slate-900 p-6 rounded-xl border border-slate-800 shadow-lg relative overflow-hidden">
+                <div className="absolute top-0 right-0 w-2 h-full bg-indigo-500"></div>
+                <p className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-1">Total de NFs Emitidas</p>
+                <p className="text-3xl font-extrabold text-indigo-400">
+                  {dadosDashboard.total_nfs_mes || 0}
+                </p>
+                <p className="text-xs text-slate-500 mt-2">Notas ativas no sistema fiscal</p>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              
+              <div className="bg-slate-900 p-6 rounded-xl border border-slate-800 shadow-lg flex flex-col justify-between">
+                <div>
+                  <h3 className="text-lg font-bold text-white mb-4 border-b border-slate-800 pb-2">Resumo da Carteira em Aberto</h3>
+                  <div className="space-y-4">
+                    <div className="flex justify-between items-center bg-slate-950 p-4 rounded-lg border border-slate-800">
+                      <span className="text-sm text-slate-400">Faturamento da Carteira</span>
+                      <span className="text-lg font-bold text-indigo-400 font-mono">
+                        R$ {(dadosDashboard.faturamento_carteira || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                      </span>
+                    </div>
+
+                    <div className="flex justify-between items-center bg-slate-950 p-4 rounded-lg border border-slate-800">
+                      <span className="text-sm text-slate-400">Volume Total em Carga</span>
+                      <span className="text-lg font-bold text-emerald-400 font-mono">
+                        {formatarKg(dadosDashboard.peso_carteira_kg)} kg
+                      </span>
+                    </div>
+
+                    <div className="flex justify-between items-center bg-slate-950 p-4 rounded-lg border border-slate-800">
+                      <span className="text-sm text-slate-400">Total de Pedidos Ativos</span>
+                      <span className="text-lg font-bold text-amber-400 font-mono">
+                        {dadosDashboard.total_pedidos_carteira || 0} pedidos
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="bg-slate-900 p-6 rounded-xl border border-slate-800 shadow-lg">
+                <h3 className="text-lg font-bold text-white mb-4 border-b border-slate-800 pb-2">Distribuição Por Estágio (Kanban)</h3>
+                
+                <div className="space-y-4">
+                  <div>
+                    <div className="flex justify-between text-xs font-semibold mb-1">
+                      <span className="text-amber-400">Pendente ({dadosDashboard.distribuicao_kanban.Pendente || 0})</span>
+                      <span className="text-slate-400">
+                        {dadosDashboard.total_pedidos_carteira ? Math.round(((dadosDashboard.distribuicao_kanban.Pendente || 0) / dadosDashboard.total_pedidos_carteira) * 100) : 0}%
+                      </span>
+                    </div>
+                    <div className="w-full bg-slate-950 h-3 rounded-full overflow-hidden border border-slate-800">
+                      <div 
+                        className="bg-amber-500 h-full transition-all duration-500" 
+                        style={{ width: `${dadosDashboard.total_pedidos_carteira ? ((dadosDashboard.distribuicao_kanban.Pendente || 0) / dadosDashboard.total_pedidos_carteira) * 100 : 0}%` }}
+                      ></div>
+                    </div>
+                  </div>
+
+                  <div>
+                    <div className="flex justify-between text-xs font-semibold mb-1">
+                      <span className="text-sky-400">Compras ({dadosDashboard.distribuicao_kanban.Compras || 0})</span>
+                      <span className="text-slate-400">
+                        {dadosDashboard.total_pedidos_carteira ? Math.round(((dadosDashboard.distribuicao_kanban.Compras || 0) / dadosDashboard.total_pedidos_carteira) * 100) : 0}%
+                      </span>
+                    </div>
+                    <div className="w-full bg-slate-950 h-3 rounded-full overflow-hidden border border-slate-800">
+                      <div 
+                        className="bg-sky-500 h-full transition-all duration-500" 
+                        style={{ width: `${dadosDashboard.total_pedidos_carteira ? ((dadosDashboard.distribuicao_kanban.Compras || 0) / dadosDashboard.total_pedidos_carteira) * 100 : 0}%` }}
+                      ></div>
+                    </div>
+                  </div>
+
+                  <div>
+                    <div className="flex justify-between text-xs font-semibold mb-1">
+                      <span className="text-purple-400">Produção ({dadosDashboard.distribuicao_kanban.Produção || 0})</span>
+                      <span className="text-slate-400">
+                        {dadosDashboard.total_pedidos_carteira ? Math.round(((dadosDashboard.distribuicao_kanban.Produção || 0) / dadosDashboard.total_pedidos_carteira) * 100) : 0}%
+                      </span>
+                    </div>
+                    <div className="w-full bg-slate-950 h-3 rounded-full overflow-hidden border border-slate-800">
+                      <div 
+                        className="bg-purple-500 h-full transition-all duration-500" 
+                        style={{ width: `${dadosDashboard.total_pedidos_carteira ? ((dadosDashboard.distribuicao_kanban.Produção || 0) / dadosDashboard.total_pedidos_carteira) * 100 : 0}%` }}
+                      ></div>
+                    </div>
+                  </div>
+
+                  <div>
+                    <div className="flex justify-between text-xs font-semibold mb-1">
+                      <span className="text-emerald-400">Pronto ({dadosDashboard.distribuicao_kanban.Pronto || 0})</span>
+                      <span className="text-slate-400">
+                        {dadosDashboard.total_pedidos_carteira ? Math.round(((dadosDashboard.distribuicao_kanban.Pronto || 0) / dadosDashboard.total_pedidos_carteira) * 100) : 0}%
+                      </span>
+                    </div>
+                    <div className="w-full bg-slate-950 h-3 rounded-full overflow-hidden border border-slate-800">
+                      <div 
+                        className="bg-emerald-500 h-full transition-all duration-500" 
+                        style={{ width: `${dadosDashboard.total_pedidos_carteira ? ((dadosDashboard.distribuicao_kanban.Pronto || 0) / dadosDashboard.total_pedidos_carteira) * 100 : 0}%` }}
+                      ></div>
+                    </div>
+                  </div>
+
+                </div>
+              </div>
+
+            </div>
+          </div>
+        )}
+
+        {/* ABA: MAPA E GERAL */}
+        {abaAtiva === 'mapa' && (
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start w-full">
             
             <div className="lg:col-span-8 space-y-6 w-full">
-              {/* CARDS DE SUMÁRIO - GERAL E MAPA */}
               <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                 <div className="bg-slate-900 p-6 rounded-xl border border-slate-800 shadow-lg">
                   <p className="text-sm font-medium text-slate-400 mb-1">Faturamento Pronto</p>
@@ -383,14 +786,13 @@ function App() {
                 </div>
 
                 <div className="bg-slate-900 p-6 rounded-xl border border-slate-800 shadow-lg">
-                  <p className="text-sm font-medium text-slate-400 mb-1">Peso Entregue Mês (Julho)</p>
+                  <p className="text-sm font-medium text-slate-400 mb-1">Peso Entregue Mês</p>
                   <p className="text-2xl font-bold text-sky-400">
                     {formatarKg(resumoMapa.peso_entregue_mes_kg)} <span className="text-sm font-normal text-slate-500">kg</span>
                   </p>
                 </div>
               </div>
 
-              {/* TABELA DE PEDIDOS PRONTOS */}
               <div className="bg-slate-900 rounded-xl border border-slate-800 shadow-lg overflow-hidden w-full">
                 <div className="p-5 border-b border-slate-800 flex justify-between items-center bg-slate-900">
                   <h2 className="text-lg font-semibold text-white">Pedidos Prontos para Expedição</h2>
@@ -452,13 +854,6 @@ function App() {
                             <td className="p-4 text-center">
                               <div className="inline-flex items-center gap-2 pl-3 pr-2 py-1.5 rounded-full border bg-emerald-500/10 text-emerald-400 border-emerald-500/30 text-xs font-semibold">
                                 <span>Pronto</span>
-                                <button 
-                                  onClick={() => alterarStatusPedido(pedido.id, 'Pendente')}
-                                  title="Voltar para Em Aberto"
-                                  className="w-4 h-4 rounded-full flex items-center justify-center text-emerald-400/60 hover:text-red-400 hover:bg-red-500/20 transition-colors focus:outline-none text-sm font-bold"
-                                >
-                                  &times;
-                                </button>
                               </div>
                             </td>
                           </tr>
@@ -477,9 +872,7 @@ function App() {
               </div>
             </div>
 
-            {/* COLUNA DO MAPA E LOGÍSTICA */}
             <div className="lg:col-span-4 lg:sticky lg:top-6 w-full space-y-6">
-              {/* MAPA */}
               <div className="bg-slate-900 rounded-xl border border-slate-800 shadow-lg overflow-hidden flex flex-col h-[550px] w-full">
                 <div className="p-5 border-b border-slate-800 flex justify-between items-center">
                   <h2 className="text-lg font-semibold text-white">Mapa de Fluxo de Entregas</h2>
@@ -539,7 +932,6 @@ function App() {
                 </div>
               </div>
 
-              {/* PAINEL LOGÍSTICA */}
               <div className="bg-slate-900 p-5 rounded-xl border border-slate-800 shadow-lg w-full">
                 <div className="border-b border-slate-800 pb-3 mb-5">
                   <h2 className="text-lg font-semibold text-white">Logística LIFO Otimizada</h2>
@@ -586,10 +978,11 @@ function App() {
               </div>
             </div>
           </div>
-        ) : (
-          /* ABA 2: CONTROLE DE PEDIDOS EM ABERTO */
+        )}
+
+        {/* ABA: CONTROLE DE PEDIDOS EM ABERTO */}
+        {abaAtiva === 'prazos' && (
           <div className="space-y-6 w-full">
-            {/* CARDS DE SUMÁRIO - CONTROLE DE PEDIDOS */}
             <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
               <div className="bg-slate-900 p-6 rounded-xl border border-slate-800 shadow-lg">
                 <p className="text-sm font-medium text-slate-400 mb-1">Faturamento Acumulado</p>
@@ -618,10 +1011,7 @@ function App() {
                   <p className="text-xs text-slate-400">Gerencie status, OFs e itens de cada pedido em tempo real</p>
                 </div>
 
-                {/* BARRA DE CONTROLES */}
                 <div className="flex flex-wrap items-center gap-3 bg-slate-950 p-2 rounded-lg border border-slate-800 w-full md:w-auto justify-between md:justify-end">
-                  
-                  {/* BOTÕES PARA ALTERNAR MODO DE EXIBIÇÃO */}
                   <div className="flex items-center bg-slate-900 p-1 rounded-md border border-slate-800">
                     <button
                       onClick={() => setModoExibicao('lista')}
@@ -647,7 +1037,6 @@ function App() {
 
                   <div className="h-4 w-px bg-slate-800 hidden sm:block"></div>
 
-                  {/* CONTROLES DE ORDENAÇÃO */}
                   <div className="flex items-center gap-2">
                     <span className="text-xs text-slate-400 font-medium hidden sm:inline">Ordenar:</span>
                     <select
@@ -684,11 +1073,9 @@ function App() {
                     const pesoKg = (pedido.peso_total_kg ?? ((pedido.peso_total_ton || 0) * 1000))
 
                     return modoExibicao === 'lista' ? (
-                      /* VISUALIZAÇÃO EM LISTA */
                       <div key={pedido.id} className="bg-slate-950 rounded-xl border border-slate-800/80 hover:border-slate-700 transition-all overflow-hidden">
                         <div className="p-4 flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
                           
-                          {/* BOTÃO EXPANDIR + IDENTIFICAÇÃO E CLIENTE */}
                           <div className="flex items-start gap-3 flex-1 min-w-[240px]">
                             <button
                               onClick={() => toggleExpandirPedido(pedido.id)}
@@ -706,7 +1093,6 @@ function App() {
                                   Nº {pedido.id_pedido} {pedido.pedido_cliente ? `PC ${pedido.pedido_cliente}` : ''}
                                 </span>
 
-                                {/* CONTADOR DE OFs PRONTAS */}
                                 <span className={`text-xs px-2 py-0.5 rounded font-mono font-semibold border ${todasConcluidas ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30' : 'bg-slate-800 text-slate-300 border-slate-700'}`}>
                                   OFs Prontas: {concluidas}/{total}
                                 </span>
@@ -716,7 +1102,6 @@ function App() {
                             </div>
                           </div>
 
-                          {/* DETALHES DE PESO E DATAS */}
                           <div className="flex items-center gap-6 text-xs text-slate-300 w-full md:w-auto justify-between md:justify-end border-t md:border-t-0 pt-3 md:pt-0 border-slate-800/60">
                             <div className="text-left md:text-center">
                               <span className="block text-[10px] text-slate-500 uppercase">Itens</span>
@@ -738,7 +1123,6 @@ function App() {
                             </div>
                           </div>
 
-                          {/* ALTERAR STATUS DO PEDIDO */}
                           <div className="flex items-center gap-3 w-full md:w-auto justify-end border-t md:border-t-0 pt-3 md:pt-0 border-slate-800/60">
                             <select
                               value={pedido.status || 'Pendente'}
@@ -746,15 +1130,12 @@ function App() {
                               className={`text-xs font-semibold rounded-lg px-3 py-2 border transition-all cursor-pointer focus:outline-none ${obterEstiloStatusCompleto(pedido.status)}`}
                             >
                               <option value="Pendente" className="bg-slate-900 text-amber-400">Pendente</option>
-                              <option value="Compras" className="bg-slate-900 text-sky-400">Compras</option>
-                              <option value="Produção" className="bg-slate-900 text-purple-400">Produção</option>
                               <option value="Pronto" className="bg-slate-900 text-emerald-400">Pronto</option>
                             </select>
                           </div>
 
                         </div>
 
-                        {/* AREA EXPANSÍVEL DA SANFONA (ITENS DA OF) */}
                         {estaExpandido && (
                           <div className="bg-slate-900/90 p-4 border-t border-slate-800/80">
                             <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3">
@@ -776,24 +1157,22 @@ function App() {
                                   </thead>
                                   <tbody className="divide-y divide-slate-800/50 text-slate-300">
                                     {pedido.itens.map((item, idx) => {
-                                      const chaveOf = `${pedido.id}-${idx}`
-                                      const estaPronto = statusOfs[chaveOf] === 'Concluido'
                                       const numeroOf = item.id_numof || '-';
-                                      const pesoItemKg = item.peso_item || item.peso_tot || 0;
+                                      const pesoItemKg = item.peso_item || 0;
 
                                       return (
                                         <tr key={idx} className="hover:bg-slate-800/40 transition-colors">
                                           <td className="py-2.5 px-3 font-mono font-bold text-indigo-300">
-                                            OF {numeroOf}
+                                            {numeroOf.toString().startsWith("ITEM") ? numeroOf : `OF ${numeroOf}`}
                                           </td>
                                           <td className="py-2.5 px-3 font-medium text-white">
                                             {item.referencia || item.id_produto || '-'}
                                           </td>
                                           <td className="py-2.5 px-3 text-center font-mono">
-                                            {item.quantidade || item.quant}
+                                            {item.quantidade}
                                           </td>
                                           <td className="py-2.5 px-3 text-right font-mono">
-                                            R$ {(item.preco_unitario || item.vlunit || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                                            R$ {(item.preco_unitario || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
                                           </td>
                                           <td className="py-2.5 px-3 text-right font-mono text-emerald-400">
                                             {formatarKg(pesoItemKg)} kg
@@ -802,16 +1181,16 @@ function App() {
                                             {item.fecha || '-'}
                                           </td>
                                           <td className="py-2.5 px-3 text-center">
-                                            <button
-                                              onClick={() => alternarStatusOf(pedido.id, idx, pedido.itens.length)}
-                                              className={`px-3 py-1 rounded-full text-[11px] font-semibold border transition-all cursor-pointer ${
-                                                estaPronto 
-                                                  ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/40 hover:bg-emerald-500/30' 
-                                                  : 'bg-amber-500/10 text-amber-400 border-amber-500/30 hover:bg-amber-500/20'
-                                              }`}
+                                            <select
+                                              value={item.statusOF || 'Pendente'}
+                                              onChange={(e) => alternarStatusOf(pedido.id, item.id_numof, e.target.value)}
+                                              className={`text-[11px] font-semibold rounded-full px-2 py-1 border cursor-pointer focus:outline-none ${obterEstiloStatusCompleto(item.statusOF)}`}
                                             >
-                                              {estaPronto ? '✓ Concluído' : '○ Pendente'}
-                                            </button>
+                                              <option value="Pendente" className="bg-slate-900 text-amber-400">O Pendente</option>
+                                              <option value="Compras" className="bg-slate-900 text-sky-400">Compras</option>
+                                              <option value="Produção" className="bg-slate-900 text-purple-400">Produção</option>
+                                              <option value="Pronto" className="bg-slate-900 text-emerald-400">✓ Concluído</option>
+                                            </select>
                                           </td>
                                         </tr>
                                       )
@@ -829,7 +1208,6 @@ function App() {
 
                       </div>
                     ) : (
-                      /* VISUALIZAÇÃO EM GRADE */
                       <div key={pedido.id} className="bg-slate-950 p-4 rounded-xl border border-slate-800 flex flex-col justify-between hover:border-slate-700 transition-colors">
                         <div>
                           <div className="flex justify-between items-start mb-2 gap-2">
@@ -839,7 +1217,6 @@ function App() {
                                   Nº {pedido.id_pedido} {pedido.pedido_cliente ? `PC ${pedido.pedido_cliente}` : ''}
                                 </span>
                                 
-                                {/* CONTADOR DE OFs PRONTAS */}
                                 <span className={`text-[10px] px-2 py-0.5 rounded font-mono font-semibold border ${todasConcluidas ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30' : 'bg-slate-800 text-slate-300 border-slate-700'}`}>
                                   OFs: {concluidas}/{total}
                                 </span>
@@ -866,7 +1243,6 @@ function App() {
                           </div>
                         </div>
 
-                        {/* BOTÃO EXPANDIR + STATUS NO MODO GRADE */}
                         <div className="space-y-3 pt-2">
                           <button
                             onClick={() => toggleExpandirPedido(pedido.id)}
@@ -878,20 +1254,19 @@ function App() {
                             </svg>
                           </button>
 
-                          {/* LISTA EXPANDIDA NO MODO GRADE */}
                           {estaExpandido && (
                             <div className="bg-slate-900/90 p-3 rounded-lg border border-slate-800 text-xs space-y-2 max-h-60 overflow-y-auto">
                               {pedido.itens && pedido.itens.length > 0 ? (
                                 pedido.itens.map((item, idx) => {
-                                  const chaveOf = `${pedido.id}-${idx}`
-                                  const estaPronto = statusOfs[chaveOf] === 'Concluido'
-                                  const pesoItemKg = item.peso_item || item.peso_tot || 0;
+                                  const pesoItemKg = item.peso_item || 0;
                                   const numeroOf = item.id_numof || '-';
 
                                   return (
                                     <div key={idx} className="p-2 bg-slate-950/70 border border-slate-800/80 rounded flex flex-col gap-1.5">
                                       <div className="flex justify-between items-center font-mono">
-                                        <span className="font-bold text-indigo-300">OF #{numeroOf}</span>
+                                        <span className="font-bold text-indigo-300">
+                                           {numeroOf.toString().startsWith("ITEM") ? numeroOf : `OF ${numeroOf}`}
+                                        </span>
                                         <span className="text-[10px] text-slate-400">Fech: {item.fecha || '-'}</span>
                                       </div>
                                       <div className="font-medium text-white truncate">{item.referencia || item.id_produto}</div>
@@ -899,16 +1274,16 @@ function App() {
                                         <span>Qtd: {item.quantidade}</span>
                                         <span className="text-emerald-400 font-mono">{formatarKg(pesoItemKg)} kg</span>
                                       </div>
-                                      <button
-                                        onClick={() => alternarStatusOf(pedido.id, idx, pedido.itens.length)}
-                                        className={`w-full py-1 mt-1 rounded text-[10px] font-semibold border transition-all cursor-pointer ${
-                                          estaPronto 
-                                            ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/40 hover:bg-emerald-500/30' 
-                                            : 'bg-amber-500/10 text-amber-400 border-amber-500/30 hover:bg-amber-500/20'
-                                        }`}
+                                      <select
+                                        value={item.statusOF || 'Pendente'}
+                                        onChange={(e) => alternarStatusOf(pedido.id, item.id_numof, e.target.value)}
+                                        className={`w-full py-1 mt-1 rounded text-[10px] font-semibold border transition-all cursor-pointer focus:outline-none ${obterEstiloStatusCompleto(item.statusOF)}`}
                                       >
-                                        {estaPronto ? '✓ Concluído' : '○ Pendente'}
-                                      </button>
+                                        <option value="Pendente" className="bg-slate-900 text-amber-400">O Pendente</option>
+                                        <option value="Compras" className="bg-slate-900 text-sky-400">Compras</option>
+                                        <option value="Produção" className="bg-slate-900 text-purple-400">Produção</option>
+                                        <option value="Pronto" className="bg-slate-900 text-emerald-400">✓ Concluído</option>
+                                      </select>
                                     </div>
                                   )
                                 })
@@ -923,11 +1298,9 @@ function App() {
                             <select
                               value={pedido.status || 'Pendente'}
                               onChange={(e) => alterarStatusPedido(pedido.id, e.target.value)}
-                              className={`text-xs font-semibold rounded-lg px-2.5 py-1.5 border transition-all cursor-pointer focus:outline-none ${obterEstiloStatusCompleto(pedido.status)}`}
+                              className={`text-xs font-semibold rounded-lg px-2.5 py-1.5 border transition-all cursor-pointer focus:outline-none ${obterEstiloStatusCompleto(pedido.status).replace('hover:', '')}`}
                             >
                               <option value="Pendente" className="bg-slate-900 text-amber-400">Pendente</option>
-                              <option value="Compras" className="bg-slate-900 text-sky-400">Compras</option>
-                              <option value="Produção" className="bg-slate-900 text-purple-400">Produção</option>
                               <option value="Pronto" className="bg-slate-900 text-emerald-400">Pronto</option>
                             </select>
                           </div>
