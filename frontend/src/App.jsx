@@ -74,7 +74,7 @@ function App() {
     bloqueioPollingRef.current = true;
     setTimeout(() => {
       bloqueioPollingRef.current = false;
-    }, 5000);
+    }, 10000); 
   };
 
   const formatarKg = (valor) => {
@@ -123,11 +123,10 @@ function App() {
         volume_carga_total_kg: dadosPedidos.volume_carga_total_kg ?? ((dadosPedidos.volume_carga_total_ton || 0) * 1000)
       })
 
-      setResumoMapa({
-        ...dadosMapa,
-        peso_pronto_kg: dadosMapa.peso_pronto_kg ?? ((dadosMapa.peso_pronto_ton || 0) * 1000),
+      setResumoMapa(prev => ({
+        ...prev,
         peso_entregue_mes_kg: dadosMapa.peso_entregue_mes_kg ?? ((dadosMapa.peso_entregue_mes_ton || 0) * 1000)
-      })
+      }))
 
       if (resDash.data) {
         setDadosDashboard(resDash.data)
@@ -150,6 +149,25 @@ function App() {
 
     return () => clearInterval(intervalId)
   }, [carregarPedidos, carregarCompras, carregarResumos])
+
+  useEffect(() => {
+    const calcularProntos = () => {
+      let fat = 0;
+      let peso = 0;
+      pedidos.forEach(p => {
+        if (p.status === 'Pronto') {
+          fat += (p.faturamento_total || 0);
+          peso += (p.peso_total_kg || 0);
+        }
+      });
+      setResumoMapa(prev => ({
+        ...prev,
+        faturamento_pronto: fat,
+        peso_pronto_kg: peso
+      }));
+    };
+    calcularProntos();
+  }, [pedidos]);
 
   const calcularDistancia = (coord1, coord2) => {
     if (!coord1 || !coord2) return 0;
@@ -249,27 +267,6 @@ function App() {
     calcularRotaOtimizada(pedidosSelecionados, pedidos);
   }, [pedidosSelecionados, pedidos, calcularRotaOtimizada]);
 
-  const alterarStatusPedido = (id, novoStatus) => {
-    pausarPollingTemporariamente();
-
-    setPedidos(prevPedidos => 
-      prevPedidos.map(p => p.id === id ? { ...p, status: novoStatus } : p)
-    );
-
-    if (novoStatus === 'Pronto') {
-      setPedidosSelecionados(prev => prev.includes(id) ? prev : [...prev, id]);
-    } else {
-      setPedidosSelecionados(prev => prev.filter(item => item !== id));
-    }
-
-    axios.put(`http://localhost:5000/api/pedidos/${id}/status`, { status: novoStatus })
-      .then(() => carregarResumos())
-      .catch(error => {
-        console.error("Erro ao persistir status no banco:", error);
-        carregarPedidos(true);
-      });
-  }
-
   const darBaixaCompra = (idCompra) => {
     pausarPollingTemporariamente();
     
@@ -333,6 +330,21 @@ function App() {
     })
   }
 
+  const alterarStatusPedido = (id, novoStatus) => {
+    pausarPollingTemporariamente();
+
+    setPedidos(prevPedidos => 
+      prevPedidos.map(p => p.id === id ? { ...p, status: novoStatus } : p)
+    );
+
+    axios.put(`http://localhost:5000/api/pedidos/${id}/status`, { status: novoStatus })
+      .then(() => carregarResumos())
+      .catch(error => {
+        console.error("Erro ao persistir status no banco:", error);
+        carregarPedidos(true);
+      });
+  }
+
   const alterarAba = (novaAba) => {
     pausarPollingTemporariamente();
     setAbaAtiva(novaAba);
@@ -393,6 +405,166 @@ function App() {
     return estilos[status] || 'bg-slate-800 text-slate-300 border-slate-700'
   }
 
+  const renderCartaoCompra = (compra) => {
+    const isExpanded = comprasExpandidas.includes(compra.idCompra);
+    
+    let todosClientes = [];
+    if(compra.itens) {
+      compra.itens.forEach(item => {
+         if(item.ofs) {
+           item.ofs.forEach(of => {
+               if(of.cliente) todosClientes.push(of.cliente);
+           });
+         }
+      });
+    }
+    const clientesUnicos = [...new Set(todosClientes)].join(", ");
+    const isRecebida = compra.dataRecebida || compra.status === 'RECEBIDA';
+
+    return (
+      <div key={compra.idCompra} className="bg-slate-950 border border-slate-800 rounded-xl overflow-hidden shadow-lg transition-all hover:border-slate-700">
+        <div 
+           className="p-4 flex flex-col md:flex-row justify-between items-start md:items-center gap-4 cursor-pointer hover:bg-slate-900/40 transition-colors" 
+           onClick={() => toggleExpandirCompra(compra.idCompra)}
+        >
+          <div className="flex-1 min-w-[250px]">
+            <div className="flex items-center gap-2 mb-1">
+               <span className="text-xs font-mono font-bold bg-indigo-500/10 text-indigo-400 px-2 py-0.5 rounded border border-indigo-500/20">
+                 OC: {compra.idCompra}
+               </span>
+               <span className={`text-[10px] px-2 py-0.5 rounded font-bold uppercase border ${!isRecebida ? 'bg-amber-500/10 text-amber-400 border-amber-500/30' : 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30'}`}>
+                 {!isRecebida ? 'Em Compras' : 'Recebida'}
+               </span>
+            </div>
+            <h3 className="font-bold text-white text-base leading-tight mt-1.5">{compra.fornecedor || 'Fornecedor Não Informado'}</h3>
+          </div>
+          
+          <div className="flex flex-wrap items-center gap-6 text-xs text-slate-300 w-full md:w-auto justify-between md:justify-end border-t md:border-t-0 pt-3 md:pt-0 border-slate-800/60">
+            <div className="text-left md:text-center">
+              <span className="block text-[10px] text-slate-500 uppercase">Emissão</span>
+              <span className="font-mono">{compra.dataEmissao || '-'}</span>
+            </div>
+            <div className="text-left md:text-center">
+              <span className="block text-[10px] text-slate-500 uppercase">Previsão</span>
+              <span className="font-mono">{compra.dataPrevisao || '-'}</span>
+            </div>
+            <div className="text-left md:text-center">
+              <span className="block text-[10px] text-slate-500 uppercase">Peso Total</span>
+              <span className="font-mono font-semibold text-sky-400">{formatarKg(compra.pesoTotalKg)} kg</span>
+            </div>
+            <div className="text-left md:text-center">
+              <span className="block text-[10px] text-slate-500 uppercase">Valor Total</span>
+              <span className="font-mono font-semibold text-emerald-400">R$ {(compra.valorTotal || 0).toLocaleString('pt-BR', {minimumFractionDigits: 2})}</span>
+            </div>
+            
+            <div className="pl-4 border-l border-slate-800 flex items-center justify-end min-w-[140px]">
+               {!isRecebida ? (
+                 <button 
+                   onClick={(e) => { e.stopPropagation(); darBaixaCompra(compra.idCompra); }} 
+                   className="bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold px-4 py-2 rounded-lg shadow-lg transition-all transform hover:scale-105 w-full"
+                 >
+                   Dar Baixa (Receber NF)
+                 </button>
+               ) : (
+                 <div className="text-[11px] text-slate-500 font-semibold flex flex-col items-end w-full">
+                   <span className="text-emerald-500 flex items-center gap-1">
+                     <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7" /></svg>
+                     Baixa Realizada
+                   </span>
+                   <span>{compra.dataRecebida}</span>
+                 </div>
+               )}
+            </div>
+          </div>
+        </div>
+        
+        <div className="px-4 py-2.5 bg-slate-900/60 border-t border-slate-800/80 text-xs flex justify-between items-center text-slate-400">
+           <span className="truncate pr-4"><strong>Cliente(s):</strong> {clientesUnicos || '-'}</span>
+        </div>
+        
+        {isExpanded && (
+          <div className="bg-slate-900/90 p-4 border-t border-slate-800/80">
+            <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3">
+              Itens da Compra e OFs Vinculadas
+            </h4>
+            {compra.itens && compra.itens.length > 0 ? (
+              <div className="overflow-x-auto">
+                <table className="w-full text-left border-collapse text-xs">
+                  <thead>
+                    <tr className="border-b border-slate-800 text-slate-500 uppercase font-mono bg-slate-950/50">
+                      <th className="py-2.5 px-3 rounded-tl-lg">OF (Nº Serial)</th>
+                      <th className="py-2.5 px-3">Cliente</th>
+                      <th className="py-2.5 px-3">Referência</th>
+                      <th className="py-2.5 px-3 text-center">Qtd OF (Cx)</th>
+                      <th className="py-2.5 px-3 text-center">Qtd Chapas</th>
+                      <th className="py-2.5 px-3 text-right">Valor Total Item</th>
+                      <th className="py-2.5 px-3 text-right">Peso Item</th>
+                      <th className="py-2.5 px-3 text-center rounded-tr-lg">Status OF</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-800/50 text-slate-300">
+                    {compra.itens.map((itemGroup, idxGroup) => {
+                      
+                      if (!itemGroup.ofs || itemGroup.ofs.length === 0) {
+                        return (
+                          <tr key={`item-${idxGroup}`} className="hover:bg-slate-800/40 transition-colors">
+                             <td className="py-2.5 px-3 font-mono font-bold text-slate-500">-</td>
+                             <td className="py-2.5 px-3 font-medium text-slate-400">-</td>
+                             <td className="py-2.5 px-3 font-medium text-slate-400">Item sem OF: {itemGroup.item}</td>
+                             <td className="py-2.5 px-3 text-center font-mono">-</td>
+                             <td className="py-2.5 px-3 text-center font-mono">{itemGroup.quantidadeChapa}</td>
+                             <td className="py-2.5 px-3 text-right font-mono">R$ {itemGroup.vltot.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</td>
+                             <td className="py-2.5 px-3 text-right font-mono text-emerald-400">{formatarKg(itemGroup.pesoChapa)} kg</td>
+                             <td className="py-2.5 px-3 text-center">-</td>
+                          </tr>
+                        )
+                      }
+
+                      return itemGroup.ofs.map((of, idxOf) => (
+                        <tr key={`of-${idxGroup}-${idxOf}`} className="hover:bg-slate-800/40 transition-colors">
+                          <td className="py-2.5 px-3 font-mono font-bold text-indigo-300">
+                            OF {of.idOF}
+                          </td>
+                          <td className="py-2.5 px-3 font-medium text-white">
+                            {of.cliente || '-'}
+                          </td>
+                          <td className="py-2.5 px-3 font-medium text-white">
+                            {of.referencia || itemGroup.item}
+                          </td>
+                          <td className="py-2.5 px-3 text-center font-mono">
+                            {of.quantOF}
+                          </td>
+                          <td className="py-2.5 px-3 text-center font-mono text-slate-400">
+                            {idxOf === 0 ? itemGroup.quantidadeChapa : '—'}
+                          </td>
+                          <td className="py-2.5 px-3 text-right font-mono">
+                            {idxOf === 0 ? `R$ ${itemGroup.vltot.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}` : '—'}
+                          </td>
+                          <td className="py-2.5 px-3 text-right font-mono text-emerald-400">
+                            {idxOf === 0 ? `${formatarKg(itemGroup.pesoChapa)} kg` : '—'}
+                          </td>
+                          <td className="py-2.5 px-3 text-center">
+                             <span className={`px-2.5 py-1 rounded-full text-[11px] font-semibold border ${obterEstiloStatusCompleto(of.statusOF).replace('hover:', '')}`}>
+                               {of.statusOF}
+                             </span>
+                          </td>
+                        </tr>
+                      ))
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <div className="text-xs text-slate-500 italic p-2 text-center">
+                Nenhum item detalhado encontrado para esta compra.
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 p-4 md:p-8 font-sans w-full">
       
@@ -420,7 +592,7 @@ function App() {
           onClick={() => alterarAba('prazos')}
           className={`pb-3 px-4 font-medium text-sm transition-colors relative whitespace-nowrap ${abaAtiva === 'prazos' ? 'text-indigo-400 border-b-2 border-indigo-400' : 'text-slate-400 hover:text-white'}`}
         >
-          Pedidos em Aberto
+          Controle de Pedidos em Aberto
         </button>
         <button
           onClick={() => alterarAba('compras')}
@@ -439,191 +611,87 @@ function App() {
       <main className="w-full mx-auto">
 
         {/* ABA: COMPRAS */}
-        {abaAtiva === 'compras' && (
-          <div className="space-y-6 w-full">
-            <div className="flex justify-between items-center border-b border-slate-800 pb-3">
-              <div>
-                 <h2 className="text-xl font-bold text-white">Compras (Chapas)</h2>
-                 <p className="text-xs text-slate-400">Controle de recebimento de matéria-prima e vínculo de OFs</p>
-              </div>
-              <button 
-                onClick={() => carregarCompras(false)} 
-                className="bg-slate-900 border border-slate-700 text-slate-300 hover:text-white px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors"
-              >
-                Atualizar Compras
-              </button>
-            </div>
-            
-            <div className="grid grid-cols-1 gap-4">
-              {compras.map(compra => {
-                 const isExpanded = comprasExpandidas.includes(compra.idCompra);
-                 
-                 let todosClientes = [];
-                 if(compra.itens) {
-                   compra.itens.forEach(item => {
-                      if(item.ofs) {
-                        item.ofs.forEach(of => {
-                            if(of.cliente) todosClientes.push(of.cliente);
-                        });
-                      }
-                   });
-                 }
-                 const clientesUnicos = [...new Set(todosClientes)].join(", ");
-                 
-                 const isRecebida = compra.dataRecebida || compra.status === 'RECEBIDA';
-                 
-                 return (
-                   <div key={compra.idCompra} className="bg-slate-950 border border-slate-800 rounded-xl overflow-hidden shadow-lg transition-all hover:border-slate-700">
-                     <div 
-                        className="p-4 flex flex-col md:flex-row justify-between items-start md:items-center gap-4 cursor-pointer hover:bg-slate-900/40 transition-colors" 
-                        onClick={() => toggleExpandirCompra(compra.idCompra)}
-                     >
-                       <div className="flex-1 min-w-[250px]">
-                         <div className="flex items-center gap-2 mb-1">
-                            <span className="text-xs font-mono font-bold bg-indigo-500/10 text-indigo-400 px-2 py-0.5 rounded border border-indigo-500/20">
-                              OC: {compra.idCompra}
-                            </span>
-                            <span className={`text-[10px] px-2 py-0.5 rounded font-bold uppercase border ${!isRecebida ? 'bg-amber-500/10 text-amber-400 border-amber-500/30' : 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30'}`}>
-                              {!isRecebida ? 'Em Compras' : 'Recebida'}
-                            </span>
-                         </div>
-                         <h3 className="font-bold text-white text-base leading-tight mt-1.5">{compra.fornecedor || 'Fornecedor Não Informado'}</h3>
-                       </div>
-                       
-                       <div className="flex flex-wrap items-center gap-6 text-xs text-slate-300 w-full md:w-auto justify-between md:justify-end border-t md:border-t-0 pt-3 md:pt-0 border-slate-800/60">
-                         <div className="text-left md:text-center">
-                           <span className="block text-[10px] text-slate-500 uppercase">Emissão</span>
-                           <span className="font-mono">{compra.dataEmissao || '-'}</span>
-                         </div>
-                         <div className="text-left md:text-center">
-                           <span className="block text-[10px] text-slate-500 uppercase">Previsão</span>
-                           <span className="font-mono">{compra.dataPrevisao || '-'}</span>
-                         </div>
-                         <div className="text-left md:text-center">
-                           <span className="block text-[10px] text-slate-500 uppercase">Peso Total</span>
-                           <span className="font-mono font-semibold text-sky-400">{formatarKg(compra.pesoTotalKg)} kg</span>
-                         </div>
-                         <div className="text-left md:text-center">
-                           <span className="block text-[10px] text-slate-500 uppercase">Valor Total</span>
-                           <span className="font-mono font-semibold text-emerald-400">R$ {(compra.valorTotal || 0).toLocaleString('pt-BR', {minimumFractionDigits: 2})}</span>
-                         </div>
-                         
-                         <div className="pl-4 border-l border-slate-800 flex items-center justify-end min-w-[140px]">
-                            {!isRecebida ? (
-                              <button 
-                                onClick={(e) => { e.stopPropagation(); darBaixaCompra(compra.idCompra); }} 
-                                className="bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold px-4 py-2 rounded-lg shadow-lg transition-all transform hover:scale-105 w-full"
-                              >
-                                Dar Baixa (Receber NF)
-                              </button>
-                            ) : (
-                              <div className="text-[11px] text-slate-500 font-semibold flex flex-col items-end w-full">
-                                <span className="text-emerald-500 flex items-center gap-1">
-                                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7" /></svg>
-                                  Baixa Realizada
-                                </span>
-                                <span>{compra.dataRecebida}</span>
-                              </div>
-                            )}
-                         </div>
-                       </div>
-                     </div>
-                     
-                     <div className="px-4 py-2.5 bg-slate-900/60 border-t border-slate-800/80 text-xs flex justify-between items-center text-slate-400">
-                        <span className="truncate pr-4"><strong>Cliente(s):</strong> {clientesUnicos || '-'}</span>
-                     </div>
-                     
-                     {isExpanded && (
-                       <div className="bg-slate-900/90 p-4 border-t border-slate-800/80">
-                         <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3">
-                           Itens da Compra e OFs Vinculadas
-                         </h4>
-                         {compra.itens && compra.itens.length > 0 ? (
-                           <div className="overflow-x-auto">
-                             <table className="w-full text-left border-collapse text-xs">
-                               <thead>
-                                 <tr className="border-b border-slate-800 text-slate-500 uppercase font-mono">
-                                   <th className="py-2 px-3">OF (Nº Serial)</th>
-                                   <th className="py-2 px-3">Referência</th>
-                                   <th className="py-2 px-3 text-center">Quantidade OF</th>
-                                   <th className="py-2 px-3 text-center">Qtd Chapas</th>
-                                   <th className="py-2 px-3 text-right">Valor Total Item</th>
-                                   <th className="py-2 px-3 text-right">Peso Item</th>
-                                   <th className="py-2 px-3 text-center">Fechamento</th>
-                                   <th className="py-2 px-3 text-center">Status OF</th>
-                                 </tr>
-                               </thead>
-                               <tbody className="divide-y divide-slate-800/50 text-slate-300">
-                                 {compra.itens.map((itemGroup, idxGroup) => {
-                                   
-                                   if (!itemGroup.ofs || itemGroup.ofs.length === 0) {
-                                     return (
-                                       <tr key={`item-${idxGroup}`} className="hover:bg-slate-800/40 transition-colors">
-                                          <td className="py-2.5 px-3 font-mono font-bold text-slate-500">-</td>
-                                          <td className="py-2.5 px-3 font-medium text-slate-400">Item sem OF: {itemGroup.item}</td>
-                                          <td className="py-2.5 px-3 text-center font-mono">-</td>
-                                          <td className="py-2.5 px-3 text-center font-mono">{itemGroup.quantidadeChapa}</td>
-                                          <td className="py-2.5 px-3 text-right font-mono">R$ {itemGroup.vltot.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</td>
-                                          <td className="py-2.5 px-3 text-right font-mono text-emerald-400">{formatarKg(itemGroup.pesoChapa)} kg</td>
-                                          <td className="py-2.5 px-3 text-center font-mono text-slate-400">-</td>
-                                          <td className="py-2.5 px-3 text-center">-</td>
-                                       </tr>
-                                     )
-                                   }
+        {abaAtiva === 'compras' && (() => {
+          const comprasEmAberto = compras.filter(c => !(c.dataRecebida || c.status === 'RECEBIDA'));
+          const comprasRecebidas = compras.filter(c => c.dataRecebida || c.status === 'RECEBIDA');
 
-                                   return itemGroup.ofs.map((of, idxOf) => (
-                                     <tr key={`of-${idxGroup}-${idxOf}`} className="hover:bg-slate-800/40 transition-colors">
-                                       <td className="py-2.5 px-3 font-mono font-bold text-indigo-300">
-                                         OF {of.idOF}
-                                       </td>
-                                       <td className="py-2.5 px-3 font-medium text-white">
-                                         {of.referencia || itemGroup.item}
-                                       </td>
-                                       <td className="py-2.5 px-3 text-center font-mono">
-                                         {of.quantOF}
-                                       </td>
-                                       <td className="py-2.5 px-3 text-center font-mono text-slate-400">
-                                         {idxOf === 0 ? itemGroup.quantidadeChapa : '—'}
-                                       </td>
-                                       <td className="py-2.5 px-3 text-right font-mono">
-                                         {idxOf === 0 ? `R$ ${itemGroup.vltot.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}` : '—'}
-                                       </td>
-                                       <td className="py-2.5 px-3 text-right font-mono text-emerald-400">
-                                         {idxOf === 0 ? `${formatarKg(itemGroup.pesoChapa)} kg` : '—'}
-                                       </td>
-                                       <td className="py-2.5 px-3 text-center font-mono text-slate-400">
-                                         {of.fechamento || '-'}
-                                       </td>
-                                       <td className="py-2.5 px-3 text-center">
-                                          <span className={`px-2.5 py-1 rounded-full text-[11px] font-semibold border ${obterEstiloStatusCompleto(of.statusOF)}`}>
-                                            {of.statusOF}
-                                          </span>
-                                       </td>
-                                     </tr>
-                                   ))
-                                 })}
-                               </tbody>
-                             </table>
-                           </div>
-                         ) : (
-                           <div className="text-xs text-slate-500 italic p-2 text-center">
-                             Nenhum item detalhado encontrado para esta compra.
-                           </div>
-                         )}
-                       </div>
-                     )}
-                   </div>
-                 )
-              })}
+          // CÁLCULOS DOS CARDS DE COMPRAS
+          const valorTotalComprasAberto = comprasEmAberto.reduce((acc, c) => acc + (c.valorTotal || 0), 0);
+          const pesoTotalComprasAberto = comprasEmAberto.reduce((acc, c) => acc + (c.pesoTotalKg || 0), 0);
 
-              {compras.length === 0 && !carregando && (
-                <div className="p-8 text-center text-slate-500 bg-slate-950/50 rounded-xl border border-slate-800">
-                  Nenhuma ordem de compra em aberto encontrada a partir do ID 1863.
+          return (
+            <div className="space-y-8 w-full">
+              
+              {/* BLOCOS DE DADOS NUMÉRICOS DE COMPRAS */}
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                <div className="bg-slate-900 p-6 rounded-xl border border-slate-800 shadow-lg">
+                  <p className="text-sm font-medium text-slate-400 mb-1">Valor Total em Compras (Aberto)</p>
+                  <p className="text-2xl font-bold text-indigo-400">
+                    R$ {valorTotalComprasAberto.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                  </p>
                 </div>
-              )}
+                
+                <div className="bg-slate-900 p-6 rounded-xl border border-slate-800 shadow-lg">
+                  <p className="text-sm font-medium text-slate-400 mb-1">Volume de Chapas Total</p>
+                  <p className="text-2xl font-bold text-emerald-400">
+                    {formatarKg(pesoTotalComprasAberto)} <span className="text-sm font-normal text-slate-500">kg</span>
+                  </p>
+                </div>
+
+                <div className="bg-slate-900 p-6 rounded-xl border border-slate-800 shadow-lg">
+                  <p className="text-sm font-medium text-slate-400 mb-1">Compras em Aberto</p>
+                  <p className="text-2xl font-bold text-amber-400">{comprasEmAberto.length}</p>
+                </div>
+              </div>
+
+              <div className="flex justify-between items-center border-b border-slate-800 pb-3">
+                <div>
+                   <h2 className="text-xl font-bold text-white">Gestão de Compras (Chapas)</h2>
+                   <p className="text-xs text-slate-400">Controle de recebimento de matéria-prima e vínculo de OFs</p>
+                </div>
+                <button 
+                  onClick={() => carregarCompras(false)} 
+                  className="bg-slate-900 border border-slate-700 text-slate-300 hover:text-white px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors"
+                >
+                  Atualizar Compras
+                </button>
+              </div>
+              
+              {/* COMPRAS EM ABERTO */}
+              <div className="space-y-4">
+                <h3 className="text-lg font-bold text-amber-400 flex items-center gap-2">
+                   <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                   Compras em Aberto ({comprasEmAberto.length})
+                </h3>
+                <div className="grid grid-cols-1 gap-4">
+                  {comprasEmAberto.map(compra => renderCartaoCompra(compra))}
+                  {comprasEmAberto.length === 0 && !carregando && (
+                    <div className="p-8 text-center text-slate-500 bg-slate-950/50 rounded-xl border border-slate-800">
+                      Nenhuma ordem de compra em aberto encontrada a partir do ID 1863.
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* COMPRAS RECEBIDAS */}
+              <div className="space-y-4 pt-6 border-t border-slate-800/60">
+                <h3 className="text-lg font-bold text-emerald-400 flex items-center gap-2">
+                   <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                   Compras Recebidas ({comprasRecebidas.length})
+                </h3>
+                <div className="grid grid-cols-1 gap-4 opacity-80 hover:opacity-100 transition-opacity">
+                  {comprasRecebidas.map(compra => renderCartaoCompra(compra))}
+                  {comprasRecebidas.length === 0 && !carregando && (
+                    <div className="p-8 text-center text-slate-500 bg-slate-950/50 rounded-xl border border-slate-800">
+                      Nenhuma ordem de compra concluída encontrada a partir do ID 1863.
+                    </div>
+                  )}
+                </div>
+              </div>
+
             </div>
-          </div>
-        )}
+          );
+        })()}
 
         {/* ABA: DASHBOARD & ANALYTICS */}
         {abaAtiva === 'dashboard' && (
@@ -1029,7 +1097,7 @@ function App() {
                       className={`flex items-center gap-1.5 px-3 py-1 text-xs font-medium rounded transition-colors ${modoExibicao === 'grade' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-white'}`}
                     >
                       <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zM14 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z" />
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2zM14 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z" />
                       </svg>
                       Grade
                     </button>
@@ -1311,7 +1379,7 @@ function App() {
 
                   {pedidosEmAberto.length === 0 && (
                     <div className="col-span-full p-8 text-center text-slate-500 bg-slate-950/50 rounded-xl border border-slate-800">
-                      Nenhum pedido em aberto encontrado.
+                      Nenum pedido em aberto encontrado.
                     </div>
                   )}
                 </div>

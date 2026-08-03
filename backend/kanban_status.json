@@ -1,6 +1,8 @@
 {
     "pedidos": {
-        "15956": "Pronto"
+        "15956": "Pronto",
+        "15960": "Pronto",
+        "15955": "Pronto"
     },
     "ofs": {
         "29185": "Pronto",
@@ -8,6 +10,19 @@
         "29227": "Produ\u00e7\u00e3o",
         "29229": "Produ\u00e7\u00e3o",
         "29231": "Produ\u00e7\u00e3o",
-        "29187": "Produ\u00e7\u00e3o"
+        "29187": "Produ\u00e7\u00e3o",
+        "29170": "Produ\u00e7\u00e3o",
+        "29181": "Produ\u00e7\u00e3o",
+        "29186": "Produ\u00e7\u00e3o",
+        "29197": "Produ\u00e7\u00e3o",
+        "29199": "Produ\u00e7\u00e3o",
+        "29200": "Produ\u00e7\u00e3o",
+        "29201": "Produ\u00e7\u00e3o",
+        "29202": "Produ\u00e7\u00e3o",
+        "29203": "Produ\u00e7\u00e3o",
+        "29204": "Produ\u00e7\u00e3o"
+    },
+    "compras_recebidas": {
+        "1864": "03/08/2026"
     }
 }

@@ -27,12 +27,11 @@ app = Flask(__name__)
 CORS(app)
 
 
-# --- SISTEMA DE ARQUIVO LOCAL PARA STATUS (NÃO ALTERA O FIREBIRD) ---
+# --- SISTEMA DE ARQUIVO LOCAL PARA STATUS (OVERRIDES MANUAIS) ---
 KANBAN_FILE = "kanban_status.json"
 
 
 def carregar_kanban_local():
-    """Carrega os status customizados de Pedidos e OFs do arquivo JSON"""
     if os.path.exists(KANBAN_FILE):
         try:
             with open(KANBAN_FILE, "r", encoding="utf-8") as f:
@@ -43,7 +42,6 @@ def carregar_kanban_local():
 
 
 def salvar_kanban_local(dados):
-    """Salva as alterações de status no arquivo local"""
     with open(KANBAN_FILE, "w", encoding="utf-8") as f:
         json.dump(dados, f, indent=4)
 
@@ -80,6 +78,34 @@ def format_date_safe(dt):
     return str(dt)
 
 
+def build_of_db_status_map(cur):
+    """
+    Constrói um mapa automático do status da OF baseado apenas na Ordem de Compra.
+    - Se a OC não foi recebida -> Compras
+    - Se a OC foi recebida (DATA_RECEBIDA preenchida ou STATUS = 'RECEBIDA') -> Produção
+    """
+    cur.execute("""
+        SELECT co.ID_NUMOF, c.STATUS, c.DATA_RECEBIDA
+        FROM OC_CHAPA_OF co
+        JOIN OC_CHAPA c ON co.ID_ORDCOMPRA = c.ID_ORDCOMPRA
+    """)
+    of_status_db = {}
+    for row in cur.fetchall():
+        if not row[0]:
+            continue
+        id_of = str(row[0])
+        status_oc = limpar_texto(row[1]).upper()
+        data_rec = row[2]
+        is_recebida = status_oc == "RECEBIDA" or data_rec is not None
+
+        if id_of not in of_status_db:
+            of_status_db[id_of] = "Produção" if is_recebida else "Compras"
+        else:
+            if not is_recebida:
+                of_status_db[id_of] = "Compras"
+    return of_status_db
+
+
 # --- ROTAS DA API ---
 
 
@@ -90,23 +116,11 @@ def obter_pedidos():
         conn = get_db_connection()
         cur = conn.cursor()
 
-        # 1. OFs em compras abertas
-        cur.execute("""
-            SELECT DISTINCT co.ID_NUMOF 
-            FROM OC_CHAPA_OF co 
-            JOIN OC_CHAPA c ON co.ID_ORDCOMPRA = c.ID_ORDCOMPRA 
-            WHERE c.STATUS IS NULL OR c.STATUS <> 'RECEBIDA'
-        """)
-        ofs_em_compras = set(
-            str(row[0]) for row in cur.fetchall() if row[0] is not None
-        )
-
-        # 2. Status locais (JSON)
+        of_status_db = build_of_db_status_map(cur)
         kanban_local = carregar_kanban_local()
         status_pedidos_local = kanban_local.get("pedidos", {})
         status_ofs_local = kanban_local.get("ofs", {})
 
-        # 3. Consulta Principal
         query = """
             SELECT 
                 p.ID_NUMPED AS ID_PEDIDO,
@@ -229,17 +243,17 @@ def obter_pedidos():
                     if id_of_val is not None
                     else f"ITEM-{len(pedidos_map[id_ped]['itens']) + 1}"
                 )
+                fecha_val = limpar_texto(row.get("fecha")).upper()
 
                 status_of = status_ofs_local.get(id_of_str)
 
                 if not status_of:
-                    if id_of_str in ofs_em_compras:
-                        status_of = "Compras"
+                    if fecha_val in ["P", "S", "1", "TRUE", "SIM", "OK", "PRONTO"]:
+                        status_of = "Pronto"
                     else:
-                        status_of = "Pendente"
+                        status_of = of_status_db.get(id_of_str, "Pendente")
 
                 concluido_bool = status_of == "Pronto"
-                fecha_val = limpar_texto(row.get("fecha"))
 
                 pedidos_map[id_ped]["itens"].append(
                     {
@@ -249,7 +263,7 @@ def obter_pedidos():
                         "quantidade": float(row.get("quantidade") or 0.0),
                         "peso_item": float(row.get("peso_item") or 0.0),
                         "preco_unitario": float(row.get("preco_unitario") or 0.0),
-                        "fecha": fecha_val,
+                        "fecha": limpar_texto(row.get("fecha")),
                         "concluido": concluido_bool,
                         "statusOF": status_of,
                     }
@@ -304,6 +318,7 @@ def obter_compras():
         conn = get_db_connection()
         cur = conn.cursor()
 
+        of_status_db = build_of_db_status_map(cur)
         kanban_local = carregar_kanban_local()
         status_ofs_local = kanban_local.get("ofs", {})
 
@@ -375,9 +390,11 @@ def obter_compras():
                     status_of = status_ofs_local.get(id_of_str)
 
                     if not status_of:
-                        status_of = (
-                            "Compras" if not row.get("data_recebida") else "Produção"
-                        )
+                        fecha_of = limpar_texto(row.get("fecha")).upper()
+                        if fecha_of in ["P", "S", "1", "TRUE", "SIM", "OK", "PRONTO"]:
+                            status_of = "Pronto"
+                        else:
+                            status_of = of_status_db.get(id_of_str, "Pendente")
 
                     compras_map[id_compra]["itens_map"][id_item_str]["ofs"].append(
                         {
@@ -386,7 +403,6 @@ def obter_compras():
                             "quantOF": float(row.get("quant_of") or 0.0),
                             "referencia": limpar_texto(row.get("referencia"))
                             or f"OF #{id_of}",
-                            "fechamento": limpar_texto(row.get("fecha")) or "-",
                             "statusOF": status_of,
                         }
                     )
@@ -413,16 +429,23 @@ def obter_compras():
 
 @app.route("/api/compras/<int:id_compra>/baixa", methods=["PUT"])
 def dar_baixa_compra(id_compra):
+    """
+    CORRIGIDO PARA DIALETO 1 DO FIREBIRD:
+    Usa 'TODAY' em vez de CURRENT_DATE para evitar o erro SQL -104.
+    Também atualiza o status de cada OF dessa compra para 'Produção' no JSON local.
+    """
     conn = None
     try:
         conn = get_db_connection()
         cur = conn.cursor()
 
+        # Update compatível com Dialeto 1 do Firebird
         cur.execute(
-            "UPDATE OC_CHAPA SET STATUS = 'RECEBIDA', DATA_RECEBIDA = CURRENT_DATE WHERE ID_ORDCOMPRA = ?",
+            "UPDATE OC_CHAPA SET STATUS = 'RECEBIDA', DATA_RECEBIDA = 'TODAY' WHERE ID_ORDCOMPRA = ?",
             (id_compra,),
         )
 
+        # Busca todas as OFs dessa compra para transicionar para Produção no JSON
         cur.execute(
             "SELECT DISTINCT ID_NUMOF FROM OC_CHAPA_OF WHERE ID_ORDCOMPRA = ?",
             (id_compra,),
@@ -439,10 +462,7 @@ def dar_baixa_compra(id_compra):
         conn.commit()
         return (
             jsonify(
-                {
-                    "sucesso": True,
-                    "mensagem": "Baixa realizada e OFs direcionadas para Produção.",
-                }
+                {"sucesso": True, "mensagem": "Baixa efetuada com sucesso no Firebird."}
             ),
             200,
         )
@@ -451,6 +471,7 @@ def dar_baixa_compra(id_compra):
         if conn:
             conn.rollback()
         print("ERRO AO DAR BAIXA NA COMPRA:", str(e))
+        traceback.print_exc()
         return jsonify({"erro": f"Erro ao atualizar baixa: {str(e)}"}), 500
     finally:
         if conn:
@@ -490,7 +511,31 @@ def atualizar_status_of(id_pedido, id_of):
         return jsonify({"erro": str(e)}), 500
 
 
-# --- ROTAS DE RESUMO E NÚMEROS (CORRIGIDAS) ---
+@app.route("/api/pedidos/status-lote", methods=["PUT"])
+def atualizar_status_lote():
+    try:
+        dados = request.get_json() or {}
+        ids = dados.get("ids", [])
+        novo_status = dados.get("status", "Pendente")
+
+        if not ids:
+            return jsonify({"erro": "Nenhum ID fornecido"}), 400
+
+        kanban_local = carregar_kanban_local()
+        for id_ped in ids:
+            kanban_local["pedidos"][str(id_ped)] = novo_status
+        salvar_kanban_local(kanban_local)
+
+        return (
+            jsonify({"sucesso": True, "mensagem": f"{len(ids)} pedidos atualizados."}),
+            200,
+        )
+
+    except Exception as e:
+        return jsonify({"erro": str(e)}), 500
+
+
+# --- ROTAS DE RESUMO E DASHBOARD ---
 
 
 @app.route("/api/resumo/pedidos", methods=["GET"])
@@ -529,9 +574,7 @@ def obter_resumo_pedidos():
             ),
             200,
         )
-
     except Exception as e:
-        print("ERRO AO GERAR RESUMO DE PEDIDOS:", str(e))
         return jsonify({"erro": str(e)}), 500
     finally:
         if conn:
@@ -545,23 +588,6 @@ def obter_resumo_mapa():
         conn = get_db_connection()
         cur = conn.cursor()
 
-        query_prontos = """
-            SELECT 
-                COALESCE(SUM(p.TOTAL_GERAL), 0) AS FATURAMENTO_PRONTO,
-                COALESCE(SUM(p.TOTAL_PESO), 0) AS PESO_PRONTO_KG
-            FROM PEDIDOS p
-            WHERE p.EMISSAO >= '2026-07-01'
-              AND p.KANBAN = 'P'
-              AND NOT EXISTS (
-                  SELECT 1 FROM FISCAL f WHERE f.ID_NUMPED = p.ID_NUMPED
-              )
-        """
-        cur.execute(query_prontos)
-        res_prontos = cur.fetchone()
-        faturamento_pronto = float(res_prontos[0] or 0.0)
-        peso_pronto_kg = float(res_prontos[1] or 0.0)
-
-        hoje = datetime.now()
         query_entregue_mes = """
             SELECT COALESCE(SUM(f.OI_BRUTO), 0) AS PESO_ENTREGUE_MES_KG
             FROM FISCAL f
@@ -571,6 +597,7 @@ def obter_resumo_mapa():
               AND (f.CANCELADA IS NULL OR f.CANCELADA <> 'S')
               AND (f.IGNORAR_PESO IS NULL OR f.IGNORAR_PESO <> 'S')
         """
+        hoje = datetime.now()
         cur.execute(query_entregue_mes, (hoje.year, hoje.month))
         res_entregue = cur.fetchone()
         peso_entregue_mes_kg = float(res_entregue[0] or 0.0)
@@ -578,18 +605,16 @@ def obter_resumo_mapa():
         return (
             jsonify(
                 {
-                    "faturamento_pronto": round(faturamento_pronto, 2),
-                    "peso_pronto_kg": round(peso_pronto_kg, 2),
-                    "peso_pronto_ton": round(peso_pronto_kg / 1000, 2),
+                    "faturamento_pronto": 0,
+                    "peso_pronto_kg": 0,
+                    "peso_pronto_ton": 0,
                     "peso_entregue_mes_kg": round(peso_entregue_mes_kg, 2),
                     "peso_entregue_mes_ton": round(peso_entregue_mes_kg / 1000, 2),
                 }
             ),
             200,
         )
-
     except Exception as e:
-        print("ERRO AO GERAR RESUMO MAPA:", str(e))
         return jsonify({"erro": str(e)}), 500
     finally:
         if conn:
@@ -618,25 +643,26 @@ def obter_resumo_dashboard():
         )
         res_carteira = cur.fetchone()
 
+        of_status_db = build_of_db_status_map(cur)
         kanban_local = carregar_kanban_local()
         status_ofs_local = kanban_local.get("ofs", {})
 
         cur.execute(
-            "SELECT DISTINCT co.ID_NUMOF FROM OC_CHAPA_OF co JOIN OC_CHAPA c ON co.ID_ORDCOMPRA = c.ID_ORDCOMPRA WHERE c.STATUS IS NULL OR c.STATUS <> 'RECEBIDA'"
-        )
-        ofs_em_compras = set(str(row[0]) for row in cur.fetchall() if row[0])
-
-        cur.execute(
-            "SELECT o.ID_NUMOF FROM ORDFAB o JOIN PEDIDOS p ON p.ID_NUMPED = o.ID_NUMPED WHERE p.EMISSAO >= '2026-07-01' AND NOT EXISTS (SELECT 1 FROM FISCAL f WHERE f.ID_NUMPED = p.ID_NUMPED)"
+            "SELECT o.ID_NUMOF, p.FECHA FROM ORDFAB o JOIN PEDIDOS ped ON ped.ID_NUMPED = o.ID_NUMPED JOIN PEDITEM p ON p.ID_NUMPED = o.ID_NUMPED AND p.ID_PRODUTO = o.ID_PRODUTO WHERE ped.EMISSAO >= '2026-07-01' AND NOT EXISTS (SELECT 1 FROM FISCAL f WHERE f.ID_NUMPED = ped.ID_NUMPED)"
         )
         todas_ofs = cur.fetchall()
 
         kanban_distrib = {"Pendente": 0, "Compras": 0, "Produção": 0, "Pronto": 0}
         for row in todas_ofs:
             of_id = str(row[0])
+            fecha_val = limpar_texto(row[1]).upper()
+
             status = status_ofs_local.get(of_id)
             if not status:
-                status = "Compras" if of_id in ofs_em_compras else "Pendente"
+                if fecha_val in ["P", "S", "1", "TRUE", "SIM", "OK", "PRONTO"]:
+                    status = "Pronto"
+                else:
+                    status = of_status_db.get(of_id, "Pendente")
 
             if status in kanban_distrib:
                 kanban_distrib[status] += 1
