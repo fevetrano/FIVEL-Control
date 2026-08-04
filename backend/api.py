@@ -1,6 +1,7 @@
 import os
 import json
 import traceback
+import threading
 from datetime import date, datetime
 from dotenv import load_dotenv
 import fdb
@@ -27,23 +28,26 @@ app = Flask(__name__)
 CORS(app)
 
 
-# --- SISTEMA DE ARQUIVO LOCAL PARA STATUS (OVERRIDES MANUAIS) ---
+# --- SISTEMA DE ARQUIVO LOCAL PARA STATUS (COM PROTEÇÃO DE THREAD) ---
 KANBAN_FILE = "kanban_status.json"
+json_lock = threading.Lock()
 
 
 def carregar_kanban_local():
-    if os.path.exists(KANBAN_FILE):
-        try:
-            with open(KANBAN_FILE, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except Exception:
-            pass
-    return {"pedidos": {}, "ofs": {}}
+    with json_lock:
+        if os.path.exists(KANBAN_FILE):
+            try:
+                with open(KANBAN_FILE, "r", encoding="utf-8") as f:
+                    return json.load(f)
+            except Exception:
+                pass
+        return {"pedidos": {}, "ofs": {}}
 
 
 def salvar_kanban_local(dados):
-    with open(KANBAN_FILE, "w", encoding="utf-8") as f:
-        json.dump(dados, f, indent=4)
+    with json_lock:
+        with open(KANBAN_FILE, "w", encoding="utf-8") as f:
+            json.dump(dados, f, indent=4)
 
 
 # --- FUNÇÃO DE CONEXÃO COM O FIREBIRD ---
@@ -79,11 +83,6 @@ def format_date_safe(dt):
 
 
 def build_of_db_status_map(cur):
-    """
-    Constrói um mapa automático do status da OF baseado apenas na Ordem de Compra.
-    - Se a OC não foi recebida -> Compras
-    - Se a OC foi recebida (DATA_RECEBIDA preenchida ou STATUS = 'RECEBIDA') -> Produção
-    """
     cur.execute("""
         SELECT co.ID_NUMOF, c.STATUS, c.DATA_RECEBIDA
         FROM OC_CHAPA_OF co
@@ -429,23 +428,16 @@ def obter_compras():
 
 @app.route("/api/compras/<int:id_compra>/baixa", methods=["PUT"])
 def dar_baixa_compra(id_compra):
-    """
-    CORRIGIDO PARA DIALETO 1 DO FIREBIRD:
-    Usa 'TODAY' em vez de CURRENT_DATE para evitar o erro SQL -104.
-    Também atualiza o status de cada OF dessa compra para 'Produção' no JSON local.
-    """
     conn = None
     try:
         conn = get_db_connection()
         cur = conn.cursor()
 
-        # Update compatível com Dialeto 1 do Firebird
         cur.execute(
             "UPDATE OC_CHAPA SET STATUS = 'RECEBIDA', DATA_RECEBIDA = 'TODAY' WHERE ID_ORDCOMPRA = ?",
             (id_compra,),
         )
 
-        # Busca todas as OFs dessa compra para transicionar para Produção no JSON
         cur.execute(
             "SELECT DISTINCT ID_NUMOF FROM OC_CHAPA_OF WHERE ID_ORDCOMPRA = ?",
             (id_compra,),
@@ -501,6 +493,25 @@ def atualizar_status_of(id_pedido, id_of):
     try:
         dados = request.get_json() or {}
         novo_status = dados.get("status", "Pendente")
+
+        kanban_local = carregar_kanban_local()
+        kanban_local["ofs"][str(id_of)] = novo_status
+        salvar_kanban_local(kanban_local)
+
+        return jsonify({"sucesso": True, "id_of": id_of, "status": novo_status}), 200
+    except Exception as e:
+        return jsonify({"erro": str(e)}), 500
+
+
+@app.route("/api/ofs/status-rapido", methods=["PUT"])
+def atualizar_status_rapido_of():
+    try:
+        dados = request.get_json() or {}
+        id_of = dados.get("id_of")
+        novo_status = dados.get("status")
+
+        if not id_of or not novo_status:
+            return jsonify({"erro": "ID da OF e Status são obrigatórios."}), 400
 
         kanban_local = carregar_kanban_local()
         kanban_local["ofs"][str(id_of)] = novo_status
