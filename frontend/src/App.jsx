@@ -36,10 +36,13 @@ function App() {
   const [rotaVoltaGeometria, setRotaVoltaGeometria] = useState([]) 
   const [ordemEntregas, setOrdemEntregas] = useState([]) 
   const [limiteExibicao, setLimiteExibicao] = useState(20)
+  
+  const [modoPesoAberto, setModoPesoAberto] = useState('total');
 
   const [resumoPedidos, setResumoPedidos] = useState({ 
     faturamento_acumulado: 0, 
     volume_carga_total_kg: 0, 
+    volume_carga_mes_kg: 0,
     pedidos_ativos: 0 
   })
   
@@ -158,12 +161,24 @@ function App() {
   }, [])
 
   useEffect(() => {
+    const endOfMonth = new Date();
+    endOfMonth.setFullYear(endOfMonth.getFullYear(), endOfMonth.getMonth() + 1, 0);
+    const endOfMonthStr = endOfMonth.toISOString().split('T')[0];
+
     const fatAcumulado = pedidos.reduce((acc, p) => acc + (p.faturamento_total || 0), 0);
     const pesoTotal = pedidos.reduce((acc, p) => acc + (p.peso_total_kg || 0), 0);
+    
+    const pesoMes = pedidos.reduce((acc, p) => {
+        if (p.raw_entrega && p.raw_entrega <= endOfMonthStr) {
+            return acc + (p.peso_total_kg || 0);
+        }
+        return acc;
+    }, 0);
     
     setResumoPedidos({ 
       faturamento_acumulado: fatAcumulado, 
       volume_carga_total_kg: pesoTotal, 
+      volume_carga_mes_kg: pesoMes,
       pedidos_ativos: pedidos.length 
     });
     
@@ -422,6 +437,20 @@ function App() {
     }
   }
 
+  const calcularTempoProducao = (dataProdStr) => {
+    if (!dataProdStr) return { texto: 'INÍCIO NÃO REGISTRADO', dias: 0 };
+    const d = new Date(dataProdStr.replace(" ", "T"));
+    if (isNaN(d)) return { texto: 'INÍCIO NÃO REGISTRADO', dias: 0 };
+    
+    const diffTime = Math.abs(new Date() - d);
+    const diffDays = Math.floor(diffTime / (1000 * 60 * 60 * 24));
+    const dataFormatada = d.toLocaleDateString('pt-BR');
+    
+    if (diffDays === 0) return { texto: `HOJE (${dataFormatada})`, dias: 0 };
+    if (diffDays === 1) return { texto: `1 DIA (${dataFormatada})`, dias: 1 };
+    return { texto: `${diffDays} DIAS (${dataFormatada})`, dias: diffDays };
+  }
+
   const pedidosFiltrados = useMemo(() => {
     return pedidos.filter(p => {
       if (!p) return false;
@@ -433,7 +462,6 @@ function App() {
     });
   }, [pedidos, termoPesquisa]);
 
-  // CORREÇÃO: O pedido só é "Pronto" se não estiver faturado E se tiver itens ativos para expedição
   const pedidosProntos = useMemo(() => pedidosFiltrados.filter(p => p.status === 'Pronto' && p.total_itens_abertos > 0), [pedidosFiltrados]);
   const pedidosEmAberto = useMemo(() => pedidosFiltrados.filter(p => p.status !== 'Pronto' && p.status !== 'Faturada'), [pedidosFiltrados]);
   const pedidosEmAbertoPaginados = useMemo(() => pedidosEmAberto.slice(0, limiteExibicao), [pedidosEmAberto, limiteExibicao]);
@@ -662,6 +690,7 @@ function App() {
       {/* SELETOR DE ABAS */}
       <div className={`w-full mx-auto mb-6 sm:mb-8 flex gap-2 border-b ${t.border} pb-px overflow-x-auto relative z-0 scrollbar-hide`}>
         <button onClick={() => alterarAba('mapa')} className={`pb-3 px-4 font-medium text-sm transition-colors relative whitespace-nowrap ${abaAtiva === 'mapa' ? `${t.textAccent} border-b-2 ${t.borderAccent}` : `${t.textSecondary} hover:${t.textPrimary}`}`}>Geral e Mapa</button>
+        <button onClick={() => alterarAba('producao')} className={`pb-3 px-4 font-medium text-sm transition-colors relative whitespace-nowrap ${abaAtiva === 'producao' ? `${t.textAccent} border-b-2 ${t.borderAccent}` : `${t.textSecondary} hover:${t.textPrimary}`}`}>Produção</button>
         <button onClick={() => alterarAba('prazos')} className={`pb-3 px-4 font-medium text-sm transition-colors relative whitespace-nowrap ${abaAtiva === 'prazos' ? `${t.textAccent} border-b-2 ${t.borderAccent}` : `${t.textSecondary} hover:${t.textPrimary}`}`}>Controle de Pedidos</button>
         <button onClick={() => alterarAba('compras')} className={`pb-3 px-4 font-medium text-sm transition-colors relative whitespace-nowrap ${abaAtiva === 'compras' ? `${t.textAccent} border-b-2 ${t.borderAccent}` : `${t.textSecondary} hover:${t.textPrimary}`}`}>Gestão de Compras</button>
         <button onClick={() => alterarAba('dashboard')} className={`pb-3 px-4 font-medium text-sm transition-colors relative whitespace-nowrap ${abaAtiva === 'dashboard' ? `${t.textAccent} border-b-2 ${t.borderAccent}` : `${t.textSecondary} hover:${t.textPrimary}`}`}>Dashboard</button>
@@ -669,6 +698,113 @@ function App() {
 
       <main className="w-full mx-auto relative z-0">
         
+        {/* ABA PRODUÇÃO (NOVA TELA - 3x3) */}
+        {abaAtiva === 'producao' && (() => {
+          const ofsEmProducao = pedidos.flatMap(p => 
+            p.itens.filter(i => i.statusOF === 'Produção').map(i => ({ ...i, pedido: p }))
+          ).sort((a, b) => new Date(b.data_producao || 0) - new Date(a.data_producao || 0));
+
+          return (
+            <div className="space-y-6 w-full relative z-0">
+               <div className={`flex flex-col md:flex-row justify-between items-start md:items-center mb-6 gap-4 border-b ${t.border} pb-5`}>
+                  <div>
+                    <h2 className={`text-2xl font-bold ${t.textPrimary}`}>Painel de Fábrica (Produção Ativa)</h2>
+                    <p className={`text-sm ${t.textSecondary} mt-1`}>Acompanhamento em tempo real das OFs em processo de fabricação</p>
+                  </div>
+                  <div className={`${t.bgAccentSoft} ${t.textAccent} font-mono px-5 py-2.5 rounded-xl text-lg font-bold border ${t.borderAccentSoft}`}>
+                    {ofsEmProducao.length} OFs em Máquina
+                  </div>
+               </div>
+               
+               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
+                  {ofsEmProducao.map((of, idx) => {
+                     const { texto: textoDias, dias } = calcularTempoProducao(of.data_producao);
+                     const corTag = dias >= 5 ? 'text-red-400 bg-red-500/10 border-red-500/20' : 
+                                    dias >= 3 ? 'text-amber-400 bg-amber-500/10 border-amber-500/20' : 
+                                    'text-sky-400 bg-sky-500/10 border-sky-500/20';
+
+                     return (
+                        <div key={`${of.id_numof}-${idx}`} className={`${t.card} rounded-2xl border ${t.border} p-5 flex flex-col justify-between shadow-lg transition-all hover:border-purple-500/40 hover:shadow-purple-500/5`}>
+                           <div className="flex justify-between items-start gap-4 mb-4">
+                              <div className="flex-1 min-w-0">
+                                 <div className="flex items-center gap-2 mb-2 flex-wrap">
+                                    <span className={`text-xs font-mono font-bold bg-purple-500/10 text-purple-400 px-2.5 py-0.5 rounded border border-purple-500/20`}>
+                                       OF {of.id_numof}
+                                    </span>
+                                    <span className={`text-[10px] font-mono font-bold ${t.inner} ${t.textSecondary} px-2 py-0.5 rounded border ${t.border}`}>
+                                       PED {of.pedido.id_pedido}
+                                    </span>
+                                 </div>
+                                 <h3 className={`font-bold ${t.textPrimary} text-lg leading-tight truncate`} title={of.pedido.cliente}>{of.pedido.cliente}</h3>
+                                 <p className={`text-[12px] ${t.textPrimary} mt-1.5 font-medium truncate`} title={of.referencia}>{of.referencia}</p>
+                              </div>
+                           </div>
+
+                           <div className="mb-4">
+                              <span className={`text-[10px] font-bold uppercase tracking-wider px-2.5 py-1 rounded border ${corTag} inline-block w-full text-center`}>
+                                 {textoDias}
+                              </span>
+                           </div>
+
+                           <div className={`grid grid-cols-2 gap-y-4 gap-x-2 py-4 border-y ${t.border} mb-4`}>
+                              <div>
+                                 <span className={`block text-[10px] ${t.textSecondary} uppercase tracking-wider mb-1`}>Qtd / Peso</span>
+                                 <span className={`font-mono font-bold ${t.textPrimary} text-sm`}>{of.quantidade} <span className="text-[10px] font-sans font-normal">cx</span></span>
+                                 <div className={`font-mono font-bold ${t.textAccent} text-xs`}>{formatarKg(of.peso_item)} kg</div>
+                              </div>
+                              <div>
+                                 <span className={`block text-[10px] ${t.textSecondary} uppercase tracking-wider mb-1`}>Qualidade</span>
+                                 <span className={`font-mono font-bold ${t.textPrimary} block truncate text-sm`} title={`${of.onda || '-'} / ${of.qualidade || '-'}`}>{of.onda || '-'} / {of.qualidade || '-'}</span>
+                                 <div className={`text-xs ${t.textSecondary} font-mono`}>{of.gramatura ? `${of.gramatura}g` : '-'}</div>
+                              </div>
+                              <div>
+                                 <span className={`block text-[10px] ${t.textSecondary} uppercase tracking-wider mb-1`}>Fechamento</span>
+                                 <span className={`font-mono font-bold ${t.textPrimary} block truncate text-sm`}>{of.fecha || 'N/A'}</span>
+                                 <div className={`text-xs ${t.textSecondary} font-mono`}>{of.comp || 0}x{of.larg || 0}x{of.alt || 0}</div>
+                              </div>
+                              <div>
+                                 <span className={`block text-[10px] ${t.textSecondary} uppercase tracking-wider mb-1`}>Impressão</span>
+                                 {(!of.cor1 && !of.cor2) ? (
+                                    <span className={`font-mono font-bold ${t.textSecondary} block text-sm`}>Sem Impr.</span>
+                                 ) : (
+                                    <>
+                                       <span className={`font-mono font-bold ${t.textPrimary} block truncate text-xs`} title={of.cor1}>{of.cor1 || '-'}</span>
+                                       {of.cor2 && <span className={`font-mono font-bold ${t.textPrimary} block truncate text-xs`} title={of.cor2}>{of.cor2}</span>}
+                                    </>
+                                 )}
+                              </div>
+                           </div>
+
+                           <div className="flex gap-2 justify-end mt-auto">
+                              <button 
+                                 onClick={() => alternarStatusOf(of.pedido.id, of.id_numof, 'Pendente')} 
+                                 className={`px-3 py-2.5 rounded-lg text-[10px] font-bold border transition-all bg-amber-500/10 text-amber-500 border-amber-500/20 hover:bg-amber-500/20`}
+                                 title="Voltar para Pendente"
+                              >
+                                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10 19l-7-7m0 0l7-7m-7 7h18" /></svg>
+                              </button>
+                              <button 
+                                 onClick={() => alternarStatusOf(of.pedido.id, of.id_numof, 'Pronto')} 
+                                 className={`flex-1 px-4 py-2.5 rounded-lg text-xs font-bold border transition-all bg-[#5DD62C] text-[#0F0F0F] border-[#5DD62C] hover:bg-[#337418] hover:border-[#337418] hover:text-[#F8F8F8] flex justify-center gap-2 items-center`}
+                              >
+                                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7" /></svg> Marcar Pronto
+                              </button>
+                           </div>
+                        </div>
+                     )
+                  })}
+                  
+                  {ofsEmProducao.length === 0 && !carregando && (
+                    <div className={`col-span-full p-16 text-center ${t.textSecondary} ${t.inner} rounded-2xl border ${t.border}`}>
+                       <svg className="w-12 h-12 mx-auto mb-4 opacity-50" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+                       <p className="text-lg">Nenhuma Ordem de Fabricação em produção no momento.</p>
+                    </div>
+                  )}
+               </div>
+            </div>
+          );
+        })()}
+
         {/* ABA COMPRAS */}
         {abaAtiva === 'compras' && (() => {
           const comprasEmAberto = compras.filter(c => !(c.dataRecebida || c.status === 'RECEBIDA'));
@@ -945,10 +1081,27 @@ function App() {
                 <p className={`text-[12px] sm:text-[13px] font-medium ${t.textSecondary} mb-1.5`}>Faturamento Ativo</p>
                 <p className={`text-2xl md:text-3xl font-bold ${t.textPrimary}`}>R$ {(resumoPedidos.faturamento_acumulado || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</p>
               </div>
-              <div className={`${t.card} p-5 md:p-6 rounded-2xl shadow-md flex flex-col justify-center`}>
-                <p className={`text-[12px] sm:text-[13px] font-medium ${t.textSecondary} mb-1.5`}>Volume Total em Aberto</p>
-                <p className={`text-2xl md:text-3xl font-bold ${t.textPrimary}`}>{formatarKg(resumoPedidos.volume_carga_total_kg)} <span className={`text-sm md:text-base font-medium ${t.textAccent} ml-1`}>kg</span></p>
+              
+              {/* Ajuste no Card de Volume de Carga: Botão Toggle de Mês/Total */}
+              <div className={`${t.card} p-5 md:p-6 rounded-2xl shadow-md flex flex-col justify-center relative`}>
+                <div className="flex justify-between items-center mb-1.5">
+                  <p className={`text-[12px] sm:text-[13px] font-medium ${t.textSecondary}`}>Volume Total em Aberto</p>
+                  <div className={`flex bg-[#151515] rounded-md border ${t.border} p-0.5 ml-2`}>
+                    <button 
+                      onClick={() => setModoPesoAberto('mes')} 
+                      className={`px-2 py-0.5 text-[10px] font-bold rounded-sm transition-all ${modoPesoAberto === 'mes' ? 'bg-[#337418] text-white shadow-sm' : 'text-gray-500 hover:text-gray-300'}`}
+                    >Mês</button>
+                    <button 
+                      onClick={() => setModoPesoAberto('total')} 
+                      className={`px-2 py-0.5 text-[10px] font-bold rounded-sm transition-all ${modoPesoAberto === 'total' ? 'bg-[#337418] text-white shadow-sm' : 'text-gray-500 hover:text-gray-300'}`}
+                    >Total</button>
+                  </div>
+                </div>
+                <p className={`text-2xl md:text-3xl font-bold ${t.textPrimary}`}>
+                  {formatarKg(modoPesoAberto === 'mes' ? resumoPedidos.volume_carga_mes_kg : resumoPedidos.volume_carga_total_kg)} <span className={`text-sm md:text-base font-medium ${t.textAccent} ml-1`}>kg</span>
+                </p>
               </div>
+
               <div className={`${t.card} p-5 md:p-6 rounded-2xl shadow-md flex flex-col justify-center`}>
                 <p className={`text-[12px] sm:text-[13px] font-medium ${t.textSecondary} mb-1.5`}>Pedidos Ativos</p>
                 <p className={`text-2xl md:text-3xl font-bold ${t.textPrimary}`}>{resumoPedidos.pedidos_ativos || 0}</p>

@@ -50,9 +50,15 @@ def init_sqlite_db():
                 categoria TEXT NOT NULL,
                 chave TEXT NOT NULL,
                 status TEXT NOT NULL,
+                data_producao TEXT,
                 PRIMARY KEY (categoria, chave)
             )
         """)
+        # Garante a criação da coluna em bancos antigos caso não exista
+        try:
+            cur.execute("ALTER TABLE kanban_status ADD COLUMN data_producao TEXT")
+        except sqlite3.OperationalError:
+            pass # Coluna já existe
         conn.commit()
         conn.close()
 
@@ -64,14 +70,17 @@ def carregar_kanban_local():
     with db_lock:
         conn = get_sqlite_conn()
         cur = conn.cursor()
-        cur.execute("SELECT categoria, chave, status FROM kanban_status")
+        cur.execute("SELECT categoria, chave, status, data_producao FROM kanban_status")
         rows = cur.fetchall()
         conn.close()
 
         resultado = {"pedidos": {}, "ofs": {}}
-        for cat, chave, st in rows:
+        for cat, chave, st, dp in rows:
             if cat in resultado:
-                resultado[cat][str(chave)] = st
+                if cat == "ofs":
+                    resultado[cat][str(chave)] = {"status": st, "data_producao": dp}
+                else:
+                    resultado[cat][str(chave)] = st
         return resultado
 
 
@@ -79,16 +88,27 @@ def safe_update_status(categoria, chave, valor):
     with db_lock:
         conn = get_sqlite_conn()
         cur = conn.cursor()
+        
+        agora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        data_prod = agora if valor == 'Produção' else None
+
+        # Se já existe uma data e estamos setando para produção, preserva a antiga
+        if valor == 'Produção':
+            cur.execute("SELECT data_producao FROM kanban_status WHERE categoria=? AND chave=?", (categoria, str(chave)))
+            row = cur.fetchone()
+            if row and row[0]:
+                data_prod = row[0]
+
         cur.execute(
-            "INSERT OR REPLACE INTO kanban_status (categoria, chave, status) VALUES (?, ?, ?)",
-            (categoria, str(chave), str(valor)),
+            "INSERT OR REPLACE INTO kanban_status (categoria, chave, status, data_producao) VALUES (?, ?, ?, ?)",
+            (categoria, str(chave), str(valor), data_prod),
         )
         conn.commit()
         conn.close()
 
 
 def safe_delete_status(categoria, chave):
-    """Nova função para limpar status manuais de pedidos que já foram 100% faturados"""
+    """Função para limpar status manuais de pedidos que já foram 100% faturados"""
     with db_lock:
         conn = get_sqlite_conn()
         cur = conn.cursor()
@@ -104,10 +124,20 @@ def safe_update_status_lote(categoria, atualizacoes_dict):
     with db_lock:
         conn = get_sqlite_conn()
         cur = conn.cursor()
+        agora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        
         for chave, valor in atualizacoes_dict.items():
+            data_prod = agora if valor == 'Produção' else None
+            
+            if valor == 'Produção':
+                cur.execute("SELECT data_producao FROM kanban_status WHERE categoria=? AND chave=?", (categoria, str(chave)))
+                row = cur.fetchone()
+                if row and row[0]:
+                    data_prod = row[0]
+
             cur.execute(
-                "INSERT OR REPLACE INTO kanban_status (categoria, chave, status) VALUES (?, ?, ?)",
-                (categoria, str(chave), str(valor)),
+                "INSERT OR REPLACE INTO kanban_status (categoria, chave, status, data_producao) VALUES (?, ?, ?, ?)",
+                (categoria, str(chave), str(valor), data_prod),
             )
         conn.commit()
         conn.close()
@@ -211,6 +241,7 @@ def obter_pedidos():
         status_pedidos_local = kanban_local.get("pedidos", {})
         status_ofs_local = kanban_local.get("ofs", {})
 
+        # Adicionado o LEFT JOIN com a tabela FT e as colunas extras solicitadas
         query = """
             SELECT 
                 p.ID_NUMPED AS ID_PEDIDO, p.PEDIDO_CLIENTE, p.EMISSAO, p.DATA_ENTREGA AS PRAZO,
@@ -224,11 +255,15 @@ def obter_pedidos():
                  FROM ITEMNF inf 
                  JOIN FISCAL f ON (inf.NF = f.NF AND inf.ID_EMPRESA = f.ID_EMPRESA)
                  WHERE inf.ID_NUMOF = o.ID_NUMOF 
-                   AND (f.CANCELADA IS NULL OR f.CANCELADA <> 'S')) AS OF_FATURADA
+                   AND (f.CANCELADA IS NULL OR f.CANCELADA <> 'S')) AS OF_FATURADA,
+                i.COMP, i.LARG, i.ALT, i.ID_ONDAFAB AS ONDA_PEDITEM, i.ID_QUALIDFAB AS QUALID_PEDITEM,
+                ft.GRAMATURA, ft.FECHAMENTO AS FECHA_FT, ft.ID_ONDAFAB AS ONDA_FT, ft.ID_QUALIDFAB AS QUALID_FT,
+                ft.DESCRICAO_COR1, ft.DESCRICAO_COR2, ft.PESO_CONJUNTO
             FROM PEDIDOS p
             LEFT JOIN CLIENTES c ON p.ID_CLIENTE = c.ID_CLIENTE
             LEFT JOIN PEDITEM i ON p.ID_NUMPED = i.ID_NUMPED
             LEFT JOIN ORDFAB o ON (o.ID_NUMPED = i.ID_NUMPED AND o.ID_PRODUTO = i.ID_PRODUTO)
+            LEFT JOIN FT ft ON (i.ID_PRODUTO = ft.ID_PRODUTO AND ft.DESATIVADO <> 'S')
             WHERE p.EMISSAO >= '2026-07-01'
               AND p.ID_NUMPED <> 15931
             ORDER BY p.ID_NUMPED DESC;
@@ -315,13 +350,25 @@ def obter_pedidos():
                     else f"ITEM-{len(pedidos_map[id_ped]['itens']) + 1}"
                 )
 
-                status_manual = status_ofs_local.get(id_of_str)
+                of_local = status_ofs_local.get(id_of_str, {})
+                status_manual = of_local.get("status") if isinstance(of_local, dict) else None
+                data_producao = of_local.get("data_producao") if isinstance(of_local, dict) else None
+
                 status_banco = of_status_db.get(id_of_str)
                 of_faturada_no_erp = int(row.get("of_faturada") or 0) > 0
 
                 status_of = obter_status_final_of(
                     status_manual, status_banco, of_faturada_no_erp
                 )
+
+                # Processamento dos novos campos da Ficha Técnica (FT)
+                onda = limpar_texto(row.get("onda_ft") or row.get("onda_peditem"))
+                qualidade = limpar_texto(row.get("qualid_ft") or row.get("qualid_peditem"))
+                gramatura = limpar_texto(row.get("gramatura"))
+                fecha_calc = limpar_texto(row.get("fecha_ft") or row.get("fecha"))
+                cor1 = limpar_texto(row.get("descricao_cor1"))
+                cor2 = limpar_texto(row.get("descricao_cor2"))
+                peso_conj = row.get("peso_conjunto")
 
                 pedidos_map[id_ped]["itens"].append(
                     {
@@ -330,10 +377,20 @@ def obter_pedidos():
                         "referencia": limpar_texto(row.get("referencia")),
                         "quantidade": float(row.get("quantidade") or 0.0),
                         "peso_item": float(row.get("peso_item") or 0.0),
+                        "peso_conjunto": float(peso_conj or 0.0),
                         "preco_unitario": float(row.get("preco_unitario") or 0.0),
-                        "fecha": limpar_texto(row.get("fecha")),
+                        "fecha": fecha_calc,
                         "concluido": (status_of == "Pronto" or status_of == "Faturada"),
                         "statusOF": status_of,
+                        "data_producao": data_producao,
+                        "onda": onda,
+                        "qualidade": qualidade,
+                        "gramatura": gramatura,
+                        "cor1": cor1,
+                        "cor2": cor2,
+                        "comp": row.get("comp"),
+                        "larg": row.get("larg"),
+                        "alt": row.get("alt")
                     }
                 )
                 pedidos_map[id_ped]["total_itens"] = len(pedidos_map[id_ped]["itens"])
@@ -356,8 +413,6 @@ def obter_pedidos():
             pedido["faturamento_total"] = round(valor_aberto, 2)
             pedido["total_itens_abertos"] = itens_ativos
 
-            # CORREÇÃO: Limpeza de lixo no SQLite
-            # Se a NF já emitiu todos os itens, o pedido deve sumir.
             if itens_ativos == 0:
                 pedido["status"] = "Faturada"
                 if str(id_ped) in status_pedidos_local:
@@ -478,8 +533,10 @@ def obter_compras():
 
                 if id_of:
                     id_of_str = str(id_of)
-                    status_manual = status_ofs_local.get(id_of_str)
+                    of_local = status_ofs_local.get(id_of_str, {})
+                    status_manual = of_local.get("status") if isinstance(of_local, dict) else None
                     status_banco = of_status_db.get(id_of_str)
+                    
                     status_of = obter_status_final_of(status_manual, status_banco)
 
                     compras_map[id_compra]["itens_map"][id_item_str]["ofs"].append(
