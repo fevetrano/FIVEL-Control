@@ -54,11 +54,19 @@ def init_sqlite_db():
                 PRIMARY KEY (categoria, chave)
             )
         """)
-        # Garante a criação da coluna em bancos antigos caso não exista
         try:
             cur.execute("ALTER TABLE kanban_status ADD COLUMN data_producao TEXT")
         except sqlite3.OperationalError:
-            pass # Coluna já existe
+            pass
+
+        # Criação da nova tabela para anotações de Orçamentos
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS orcamento_notas (
+                id_orcamento TEXT PRIMARY KEY,
+                anotacao TEXT NOT NULL,
+                data_atualizacao TEXT NOT NULL
+            )
+        """)
         conn.commit()
         conn.close()
 
@@ -92,7 +100,6 @@ def safe_update_status(categoria, chave, valor):
         agora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         data_prod = agora if valor == 'Produção' else None
 
-        # Se já existe uma data e estamos setando para produção, preserva a antiga
         if valor == 'Produção':
             cur.execute("SELECT data_producao FROM kanban_status WHERE categoria=? AND chave=?", (categoria, str(chave)))
             row = cur.fetchone()
@@ -108,7 +115,6 @@ def safe_update_status(categoria, chave, valor):
 
 
 def safe_delete_status(categoria, chave):
-    """Função para limpar status manuais de pedidos que já foram 100% faturados"""
     with db_lock:
         conn = get_sqlite_conn()
         cur = conn.cursor()
@@ -128,7 +134,6 @@ def safe_update_status_lote(categoria, atualizacoes_dict):
         
         for chave, valor in atualizacoes_dict.items():
             data_prod = agora if valor == 'Produção' else None
-            
             if valor == 'Produção':
                 cur.execute("SELECT data_producao FROM kanban_status WHERE categoria=? AND chave=?", (categoria, str(chave)))
                 row = cur.fetchone()
@@ -197,7 +202,6 @@ def build_of_db_status_map(cur):
 
 
 def obter_status_final_of(status_manual, status_banco, tem_nf=False):
-    # A ordem de prioridade agora respeita o faturamento acima de tudo
     if tem_nf:
         return "Faturada"
     if status_manual:
@@ -241,7 +245,6 @@ def obter_pedidos():
         status_pedidos_local = kanban_local.get("pedidos", {})
         status_ofs_local = kanban_local.get("ofs", {})
 
-        # Adicionado o LEFT JOIN com a tabela FT e as colunas extras solicitadas
         query = """
             SELECT 
                 p.ID_NUMPED AS ID_PEDIDO, p.PEDIDO_CLIENTE, p.EMISSAO, p.DATA_ENTREGA AS PRAZO,
@@ -304,9 +307,7 @@ def obter_pedidos():
                             else dt_entrega if isinstance(dt_entrega, date) else None
                         )
                         if dt_entrega_date:
-                            data_entrega_formatada = dt_entrega_date.strftime(
-                                "%d/%m/%Y"
-                            )
+                            data_entrega_formatada = dt_entrega_date.strftime("%d/%m/%Y")
                             raw_entrega_str = dt_entrega_date.strftime("%Y-%m-%d")
                             dias_restantes = (dt_entrega_date - hoje).days
                     except Exception:
@@ -361,7 +362,6 @@ def obter_pedidos():
                     status_manual, status_banco, of_faturada_no_erp
                 )
 
-                # Processamento dos novos campos da Ficha Técnica (FT)
                 onda = limpar_texto(row.get("onda_ft") or row.get("onda_peditem"))
                 qualidade = limpar_texto(row.get("qualid_ft") or row.get("qualid_peditem"))
                 gramatura = limpar_texto(row.get("gramatura"))
@@ -416,26 +416,20 @@ def obter_pedidos():
             if itens_ativos == 0:
                 pedido["status"] = "Faturada"
                 if str(id_ped) in status_pedidos_local:
-                    safe_delete_status(
-                        "pedidos", id_ped
-                    )  # Remove a trava que o usuário deu
+                    safe_delete_status("pedidos", id_ped) 
             else:
                 manual_ped = status_pedidos_local.get(str(id_ped))
                 if manual_ped:
                     pedido["status"] = manual_ped
                 else:
-                    abertos = [
-                        i for i in pedido["itens"] if i["statusOF"] != "Faturada"
-                    ]
-                    if len(abertos) > 0 and all(
-                        i["statusOF"] == "Pronto" for i in abertos
-                    ):
+                    abertos = [i for i in pedido["itens"] if i["statusOF"] != "Faturada"]
+                    if len(abertos) > 0 and all(i["statusOF"] == "Pronto" for i in abertos):
                         pedido["status"] = "Pronto"
                     else:
                         pedido["status"] = "Pendente"
 
-            if pedido["status"] != "Faturada":
-                lista_pedidos.append(pedido)
+            # AGORA ANEXA TODOS, INCLUSIVE FATURADOS, PARA QUE O FRONTEND POSSA EXIBI-LOS NA ABA "FATURADOS"
+            lista_pedidos.append(pedido)
 
         ordenar_por = request.args.get("ordenar_por", "id_pedido").lower()
         ordem = request.args.get("ordem", "desc").lower()
@@ -463,6 +457,115 @@ def obter_pedidos():
     finally:
         if conn:
             conn.close()
+
+
+@app.route("/api/orcamentos", methods=["GET"])
+def obter_orcamentos():
+    conn = None
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+
+        # Busca anotações do SQLite
+        notas_locais = {}
+        with db_lock:
+            sqlite_conn = get_sqlite_conn()
+            scur = sqlite_conn.cursor()
+            scur.execute("SELECT id_orcamento, anotacao, data_atualizacao FROM orcamento_notas")
+            for row in scur.fetchall():
+                notas_locais[str(row[0])] = {"anotacao": row[1], "data_atualizacao": row[2]}
+            sqlite_conn.close()
+
+        # Puxa orçamentos limitando pela emissão para não sobrecarregar
+        query = """
+            SELECT 
+                o.ID_ORCAMENTO, o.EMISSAO, o.VALIDADE, o.ID_CLIENTE, o.NOME_CLIENTE,
+                o.COMPRADOR, o.FONE, o.COND_PAGTO, o.PRAZO_ENTREGA, o.TOTAL_GERAL, o.TOTAL_PESO,
+                i.REFERENCIA, i.MODELO_CAIXA, i.FECHAMENTO, i.COMP, i.LARG, i.ALT,
+                i.QUANT, i.VLUNIT, i.VLTOT, i.ID_ONDAFAB, i.ID_QUALIDFAB, i.COR1, i.COR2, i.APROVADO
+            FROM ORCAMENT o
+            LEFT JOIN ORCITEM i ON o.ID_ORCAMENTO = i.ID_ORCAMENTO
+            WHERE (o.DESATIVADO IS NULL OR o.DESATIVADO <> 'S')
+              AND o.EMISSAO >= '2026-01-01'
+            ORDER BY o.ID_ORCAMENTO DESC
+        """
+        cur.execute(query)
+        colunas = [desc[0].lower() for desc in cur.description]
+        registros = cur.fetchall()
+        
+        orc_map = {}
+        for reg in registros:
+            row = dict(zip(colunas, reg))
+            id_orc = str(row.get("id_orcamento"))
+            if not id_orc or id_orc == "None": continue
+            
+            if id_orc not in orc_map:
+                dt_emissao = row.get("emissao")
+                raw_emissao_str = dt_emissao.strftime("%Y-%m-%d %H:%M:%S") if isinstance(dt_emissao, (datetime, date)) else str(dt_emissao or "")
+                
+                nota_local = notas_locais.get(id_orc, {})
+                
+                orc_map[id_orc] = {
+                    "id_orcamento": row.get("id_orcamento"),
+                    "emissao": format_date_safe(dt_emissao),
+                    "raw_emissao": raw_emissao_str,
+                    "validade": limpar_texto(row.get("validade")),
+                    "cliente": limpar_texto(row.get("nome_cliente")),
+                    "comprador": limpar_texto(row.get("comprador")),
+                    "telefone": limpar_texto(row.get("fone")),
+                    "cond_pagto": limpar_texto(row.get("cond_pagto")),
+                    "prazo_entrega": limpar_texto(row.get("prazo_entrega")),
+                    "total_geral": float(row.get("total_geral") or 0.0),
+                    "total_peso": float(row.get("total_peso") or 0.0),
+                    "anotacao": nota_local.get("anotacao", ""),
+                    "data_anotacao": nota_local.get("data_atualizacao", ""),
+                    "itens": []
+                }
+            
+            if row.get("referencia"):
+                orc_map[id_orc]["itens"].append({
+                    "referencia": limpar_texto(row.get("referencia")),
+                    "modelo": limpar_texto(row.get("modelo_caixa")),
+                    "fechamento": limpar_texto(row.get("fechamento")),
+                    "comp": row.get("comp"), "larg": row.get("larg"), "alt": row.get("alt"),
+                    "quantidade": float(row.get("quant") or 0.0),
+                    "vl_unit": float(row.get("vlunit") or 0.0),
+                    "vl_tot": float(row.get("vltot") or 0.0),
+                    "onda": limpar_texto(row.get("id_ondafab")),
+                    "qualidade": limpar_texto(row.get("id_qualidfab")),
+                    "cor1": limpar_texto(row.get("cor1")),
+                    "cor2": limpar_texto(row.get("cor2")),
+                    "aprovado": limpar_texto(row.get("aprovado"))
+                })
+                
+        return jsonify(list(orc_map.values())), 200
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"erro": str(e)}), 500
+    finally:
+        if conn: conn.close()
+
+
+@app.route("/api/orcamentos/<int:id_orcamento>/nota", methods=["PUT"])
+def salvar_nota_orcamento(id_orcamento):
+    try:
+        dados = request.get_json() or {}
+        nova_nota = dados.get("anotacao", "")
+        agora = datetime.now().strftime("%d/%m/%Y %H:%M")
+        
+        with db_lock:
+            conn = get_sqlite_conn()
+            cur = conn.cursor()
+            cur.execute(
+                "INSERT OR REPLACE INTO orcamento_notas (id_orcamento, anotacao, data_atualizacao) VALUES (?, ?, ?)",
+                (str(id_orcamento), nova_nota, agora)
+            )
+            conn.commit()
+            conn.close()
+            
+        return jsonify({"sucesso": True, "data_atualizacao": agora}), 200
+    except Exception as e:
+        return jsonify({"erro": str(e)}), 500
 
 
 @app.route("/api/compras", methods=["GET"])
