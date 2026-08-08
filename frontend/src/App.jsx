@@ -54,7 +54,7 @@ function App() {
     faturamento_carteira: 0, 
     peso_carteira_kg: 0, 
     total_pedidos_carteira: 0,
-    distribuicao_kanban: { Pendente: 0, Compras: 0, Produção: 0, Pronto: 0, Faturada: 0 },
+    distribuicao_kanban: { Pendente: 0, Compras: 0, Produção: 0, Pronto: 0, Parcial: 0, Faturada: 0 },
     mes_referencia: ''
   })
 
@@ -186,7 +186,7 @@ function App() {
     const pesoTotal = pedidosAtivosGerais.reduce((acc, p) => acc + (p.peso_total_kg || 0), 0);
     
     let fatPronto = 0, pesoPronto = 0;
-    const distrib = { Pendente: 0, Compras: 0, Produção: 0, Pronto: 0, Faturada: 0 };
+    const distrib = { Pendente: 0, Compras: 0, Produção: 0, Parcial: 0, Pronto: 0, Faturada: 0 };
     
     pedidos.forEach(p => {
       if (p.status === 'Pronto') { 
@@ -546,6 +546,7 @@ function App() {
       'Pendente': isDarkMode ? 'bg-amber-500/10 text-amber-400 border-amber-500/20' : 'bg-amber-100 text-amber-700 border-amber-300',
       'Compras': isDarkMode ? 'bg-sky-500/10 text-sky-400 border-sky-500/20' : 'bg-sky-100 text-sky-700 border-sky-300',
       'Produção': isDarkMode ? 'bg-purple-500/10 text-purple-400 border-purple-500/20' : 'bg-purple-100 text-purple-700 border-purple-300',
+      'Parcial': isDarkMode ? 'bg-teal-500/10 text-teal-400 border-teal-500/20' : 'bg-teal-100 text-teal-700 border-teal-300',
       'Pronto': isDarkMode ? 'bg-[#5DD62C]/10 text-[#5DD62C] border-[#5DD62C]/20' : 'bg-[#5DD62C]/20 text-[#337418] border-[#337418]/30',
       'Faturada': isDarkMode ? 'bg-gray-500/10 text-gray-400 border-gray-500/20 opacity-75' : 'bg-gray-200 text-gray-600 border-gray-300 opacity-75'
     }
@@ -598,7 +599,7 @@ function App() {
             <div className={`pt-3 md:pt-0 md:pl-4 border-t md:border-t-0 md:border-l ${t.border} flex items-center justify-end w-full md:w-auto md:min-w-[140px]`}>
                {!isRecebida ? (
                  <button onClick={(e) => { e.stopPropagation(); darBaixaCompra(compra.idCompra); }} className="bg-[#5DD62C] hover:bg-[#337418] text-[#0F0F0F] hover:text-[#F8F8F8] text-xs font-bold px-4 py-3 md:py-2.5 rounded-lg shadow-lg hover:scale-105 w-full text-center transition-all">
-                   Dar Baixa (Receber)
+                   Dar Baixa
                  </button>
                ) : (
                  <div className={`text-[11px] ${t.textSecondary} font-semibold flex flex-row md:flex-col items-center md:items-end justify-between w-full`}>
@@ -622,7 +623,7 @@ function App() {
                 <table className="w-full text-left border-collapse text-xs min-w-[600px]">
                   <thead>
                     <tr className={`border-b ${t.border} ${t.textSecondary} uppercase font-mono ${isDarkMode ? 'bg-slate-950/50' : 'bg-gray-200/50'}`}>
-                      <th className="py-3 px-3">OF (Nº Serial)</th>
+                      <th className="py-3 px-3">OF (OF)</th>
                       <th className="py-3 px-3">Cliente</th>
                       <th className="py-3 px-3">Referência</th>
                       <th className="py-3 px-3 text-center">Qtd OF</th>
@@ -682,15 +683,19 @@ function App() {
       
       {/* HEADER */}
       <header className={`w-full mx-auto mb-6 flex flex-col sm:flex-row justify-between items-start sm:items-center border-b ${t.border} pb-5 gap-4 relative z-10`}>
-        <div>
-          <h1 className={`text-2xl font-bold tracking-tight ${t.textPrimary}`}>FIVEL Control</h1>
-          <p className={`${t.textSecondary} text-sm`}>Painel de Controle de Carga e Produção</p>
+        <div className="flex items-center gap-3.5">
+          <img src="/logo.svg" alt="FIVEL Control Logo" className="w-10 h-10 object-contain" />
+          <div>
+            <h1 className={`text-2xl font-bold tracking-tight ${t.textPrimary}`}>FIVEL Control</h1>
+            <p className={`${t.textSecondary} text-sm`}>Painel de Controle de Carga e Produção</p>
+          </div>
         </div>
+        
         <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 w-full sm:w-auto">
           
           <button onClick={() => setModalBipadorAberto(true)} className={`flex items-center justify-center gap-2 bg-[#5DD62C] hover:bg-[#337418] text-[#0F0F0F] hover:text-[#F8F8F8] px-4 py-3 sm:py-2 rounded-xl border border-transparent shadow-sm hover:scale-105 transition-all text-xs font-bold w-full sm:w-auto`}>
             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 4v16m8-8H4" /></svg>
-            Lançamento Rápido OF
+            Lançador de OFs
           </button>
           
           <button onClick={() => setIsDarkMode(!isDarkMode)} className={`flex items-center justify-center gap-2 ${t.card} px-4 py-3 sm:py-2 rounded-xl border ${t.border} shadow-sm hover:scale-105 transition-all text-xs font-bold ${t.textSecondary} hover:${t.textPrimary} w-full sm:w-auto`}>
@@ -718,9 +723,10 @@ function App() {
             <div className="space-y-5">
               <div>
                 <label className={`block text-xs font-bold ${t.textSecondary} uppercase tracking-wider mb-2`}>1. Escolha o Status</label>
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                <div className="grid grid-cols-2 md:grid-cols-5 gap-2">
                   <button onClick={() => { setStatusBipador('Pendente'); inputBipadorRef.current.focus(); }} className={`py-3 sm:py-2 rounded-lg text-[11px] font-bold border transition-all ${statusBipador === 'Pendente' ? 'bg-amber-500/20 text-amber-500 border-amber-500/50' : `${t.inner} ${t.textSecondary} ${t.border}`}`}>PENDENTE</button>
                   <button onClick={() => { setStatusBipador('Produção'); inputBipadorRef.current.focus(); }} className={`py-3 sm:py-2 rounded-lg text-[11px] font-bold border transition-all ${statusBipador === 'Produção' ? 'bg-purple-500/20 text-purple-500 border-purple-500/50' : `${t.inner} ${t.textSecondary} ${t.border}`}`}>PRODUÇÃO</button>
+                  <button onClick={() => { setStatusBipador('Parcial'); inputBipadorRef.current.focus(); }} className={`py-3 sm:py-2 rounded-lg text-[11px] font-bold border transition-all ${statusBipador === 'Parcial' ? 'bg-teal-500/20 text-teal-500 border-teal-500/50' : `${t.inner} ${t.textSecondary} ${t.border}`}`}>PARCIAL</button>
                   <button onClick={() => { setStatusBipador('Pronto'); inputBipadorRef.current.focus(); }} className={`py-3 sm:py-2 rounded-lg text-[11px] font-bold border transition-all ${statusBipador === 'Pronto' ? 'bg-[#5DD62C]/20 text-[#5DD62C] border-[#5DD62C]/50' : `${t.inner} ${t.textSecondary} ${t.border}`}`}>PRONTO</button>
                   <button onClick={() => { setStatusBipador('Faturada'); inputBipadorRef.current.focus(); }} className={`py-3 sm:py-2 rounded-lg text-[11px] font-bold border transition-all ${statusBipador === 'Faturada' ? 'bg-gray-500/20 text-gray-400 border-gray-500/50' : `${t.inner} ${t.textSecondary} ${t.border}`}`}>FATURADA</button>
                 </div>
@@ -744,11 +750,11 @@ function App() {
 
       {/* SELETOR DE ABAS */}
       <div className={`w-full mx-auto mb-6 sm:mb-8 flex gap-2 border-b ${t.border} pb-px overflow-x-auto relative z-0 scrollbar-hide`}>
-        <button onClick={() => alterarAba('mapa')} className={`pb-3 px-4 font-medium text-sm transition-colors relative whitespace-nowrap ${abaAtiva === 'mapa' ? `${t.textAccent} border-b-2 ${t.borderAccent}` : `${t.textSecondary} hover:${t.textPrimary}`}`}>Geral e Mapa</button>
+        <button onClick={() => alterarAba('mapa')} className={`pb-3 px-4 font-medium text-sm transition-colors relative whitespace-nowrap ${abaAtiva === 'mapa' ? `${t.textAccent} border-b-2 ${t.borderAccent}` : `${t.textSecondary} hover:${t.textPrimary}`}`}>Expedição e Mapa</button>
         <button onClick={() => alterarAba('producao')} className={`pb-3 px-4 font-medium text-sm transition-colors relative whitespace-nowrap ${abaAtiva === 'producao' ? `${t.textAccent} border-b-2 ${t.borderAccent}` : `${t.textSecondary} hover:${t.textPrimary}`}`}>Produção</button>
-        <button onClick={() => alterarAba('prazos')} className={`pb-3 px-4 font-medium text-sm transition-colors relative whitespace-nowrap ${abaAtiva === 'prazos' ? `${t.textAccent} border-b-2 ${t.borderAccent}` : `${t.textSecondary} hover:${t.textPrimary}`}`}>Controle de Pedidos</button>
+        <button onClick={() => alterarAba('prazos')} className={`pb-3 px-4 font-medium text-sm transition-colors relative whitespace-nowrap ${abaAtiva === 'prazos' ? `${t.textAccent} border-b-2 ${t.borderAccent}` : `${t.textSecondary} hover:${t.textPrimary}`}`}>Pedidos</button>
         <button onClick={() => alterarAba('orcamentos')} className={`pb-3 px-4 font-medium text-sm transition-colors relative whitespace-nowrap ${abaAtiva === 'orcamentos' ? `${t.textAccent} border-b-2 ${t.borderAccent}` : `${t.textSecondary} hover:${t.textPrimary}`}`}>Orçamentos</button>
-        <button onClick={() => alterarAba('compras')} className={`pb-3 px-4 font-medium text-sm transition-colors relative whitespace-nowrap ${abaAtiva === 'compras' ? `${t.textAccent} border-b-2 ${t.borderAccent}` : `${t.textSecondary} hover:${t.textPrimary}`}`}>Gestão de Compras</button>
+        <button onClick={() => alterarAba('compras')} className={`pb-3 px-4 font-medium text-sm transition-colors relative whitespace-nowrap ${abaAtiva === 'compras' ? `${t.textAccent} border-b-2 ${t.borderAccent}` : `${t.textSecondary} hover:${t.textPrimary}`}`}>Compras</button>
         <button onClick={() => alterarAba('dashboard')} className={`pb-3 px-4 font-medium text-sm transition-colors relative whitespace-nowrap ${abaAtiva === 'dashboard' ? `${t.textAccent} border-b-2 ${t.borderAccent}` : `${t.textSecondary} hover:${t.textPrimary}`}`}>Dashboard</button>
       </div>
 
@@ -808,7 +814,7 @@ function App() {
                             </td>
                             <td className="p-4 font-medium">
                               <div className="flex items-center gap-2">
-                                <span className={`text-xs ${t.inner} px-2 py-0.5 rounded ${t.textSecondary} font-mono border ${t.border}`}>Nº {pedido.id_pedido}</span>
+                                <span className={`text-xs ${t.inner} px-2 py-0.5 rounded ${t.textSecondary} font-mono border ${t.border}`}>PEDIDO {pedido.id_pedido}</span>
                               </div>
                               <div className="mt-1 font-bold">{pedido.cliente || 'Sem Nome'}</div>
                               <span className={`block text-[11px] ${t.textSecondary}`}>{pedido.cidade_bloco || ''}</span>
@@ -869,7 +875,7 @@ function App() {
                               <span className={`w-7 h-7 rounded-full ${t.bgAccentSoft} ${t.textAccent} font-mono text-xs flex items-center justify-center font-bold border ${t.borderAccentSoft}`}>{index + 1}</span>
                               <div>
                                 <div className={`font-bold ${t.textPrimary} text-sm line-clamp-1`}>{pedido?.cliente || 'Cliente'}</div>
-                                <div className={`text-[11px] ${t.textSecondary} font-mono mt-0.5`}>Nº {pedido?.id_pedido}</div>
+                                <div className={`text-[11px] ${t.textSecondary} font-mono mt-0.5`}>PEDIDO {pedido?.id_pedido}</div>
                               </div>
                             </div>
                             <span className={`text-xs font-mono ${t.textAccent} font-bold whitespace-nowrap`}>{formatarKg(pedido?.peso_total_kg)} kg</span>
@@ -894,11 +900,10 @@ function App() {
             <div className="space-y-6 w-full relative z-0">
                <div className={`flex flex-col md:flex-row justify-between items-start md:items-center mb-6 gap-4 border-b ${t.border} pb-5`}>
                   <div>
-                    <h2 className={`text-2xl font-bold ${t.textPrimary}`}>Painel de Fábrica (Produção Ativa)</h2>
-                    <p className={`text-sm ${t.textSecondary} mt-1`}>Acompanhamento em tempo real das OFs em processo de fabricação</p>
+                    <h2 className={`text-2xl font-bold ${t.textPrimary}`}>Painel de Controle de Produção</h2>
                   </div>
                   <div className={`${t.bgAccentSoft} ${t.textAccent} font-mono px-5 py-2.5 rounded-xl text-lg font-bold border ${t.borderAccentSoft}`}>
-                    {ofsEmProducao.length} OFs em Máquina
+                    {ofsEmProducao.length} OFs em Produção
                   </div>
                </div>
                
@@ -934,9 +939,9 @@ function App() {
 
                            <div className={`grid grid-cols-2 gap-y-4 gap-x-2 py-4 border-y ${t.border} mb-4`}>
                               <div>
-                                 <span className={`block text-[10px] ${t.textSecondary} uppercase tracking-wider mb-1`}>Qtd / Peso</span>
-                                 <span className={`font-mono font-bold ${t.textPrimary} text-sm`}>{of.quantidade} <span className="text-[10px] font-sans font-normal">cx</span></span>
-                                 <div className={`font-mono font-bold ${t.textAccent} text-xs`}>{formatarKg(of.peso_item)} kg</div>
+                                 <span className={`block text-[10px] ${t.textSecondary} uppercase tracking-wider mb-1`}>Qtd Faltante / Peso</span>
+                                 <span className={`font-mono font-bold ${t.textPrimary} text-sm`}>{Math.round(of.qtd_restante)} <span className="text-[10px] font-sans font-normal">cx</span></span>
+                                 <div className={`font-mono font-bold ${t.textAccent} text-xs`}>{formatarKg(of.peso_restante)} kg</div>
                               </div>
                               <div>
                                  <span className={`block text-[10px] ${t.textSecondary} uppercase tracking-wider mb-1`}>Qualidade</span>
@@ -991,19 +996,18 @@ function App() {
           );
         })()}
 
-        {/* ABA ORÇAMENTOS (NOVA TELA) */}
+        {/* ABA ORÇAMENTOS */}
         {abaAtiva === 'orcamentos' && (
           <div className="space-y-6 w-full relative z-0">
              <div className={`flex flex-col md:flex-row justify-between items-start md:items-center mb-6 gap-4 border-b ${t.border} pb-5`}>
                 <div>
-                  <h2 className={`text-xl font-bold ${t.textPrimary}`}>Gestão de Orçamentos (Follow-up)</h2>
-                  <p className={`text-xs ${t.textSecondary} mt-1`}>Controle e anotações das cotações em andamento</p>
+                  <h2 className={`text-xl font-bold ${t.textPrimary}`}>Gestão de Orçamentos</h2>
                 </div>
                 
                 <div className={`flex flex-col xl:flex-row items-center gap-3 w-full xl:w-auto`}>
                   <div className="relative w-full xl:w-64 flex-shrink-0">
                     <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none"><svg className={`w-4 h-4 ${t.textSecondary}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" /></svg></div>
-                    <input type="text" value={termoPesquisaOrcamento} onChange={(e) => setTermoPesquisaOrcamento(e.target.value)} placeholder="Buscar nº, cliente ou contato..." className={`w-full pl-9 pr-3 py-3 md:py-2 bg-transparent border ${t.border} rounded-lg text-xs md:text-sm ${t.textPrimary} focus:outline-none focus:border-sky-500`} />
+                    <input type="text" value={termoPesquisaOrcamento} onChange={(e) => setTermoPesquisaOrcamento(e.target.value)} placeholder="Buscar Nº, cliente ou contato..." className={`w-full pl-9 pr-3 py-3 md:py-2 bg-transparent border ${t.border} rounded-lg text-xs md:text-sm ${t.textPrimary} focus:outline-none focus:border-sky-500`} />
                   </div>
                   <button onClick={() => carregarOrcamentos(false)} className={`w-full xl:w-auto ${t.card} border ${t.border} ${t.textPrimary} hover:border-sky-500 hover:text-sky-500 px-4 py-3 md:py-2 rounded-lg text-xs font-semibold shadow-sm transition-all`}>
                     Atualizar Tabela
@@ -1146,13 +1150,13 @@ function App() {
           <div className="space-y-6 sm:space-y-8 w-full relative z-0">
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 md:gap-5">
               <div className={`${t.card} p-5 md:p-6 rounded-2xl shadow-md flex flex-col justify-center transition-all duration-300`}>
-                <p className={`text-[12px] sm:text-[13px] font-medium ${t.textSecondary} mb-1.5`}>Faturamento na Tela</p>
+                <p className={`text-[12px] sm:text-[13px] font-medium ${t.textSecondary} mb-1.5`}>Faturamento em Aberto</p>
                 <p className={`text-2xl md:text-3xl font-bold ${t.textPrimary}`}>R$ {(faturamentoAtual || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</p>
               </div>
               
               <div className={`${t.card} p-5 md:p-6 rounded-2xl shadow-md flex flex-col justify-center relative transition-all duration-300`}>
                 <div className="flex justify-between items-center mb-1.5">
-                  <p className={`text-[12px] sm:text-[13px] font-medium ${t.textSecondary}`}>Volume em Aberto na Tela</p>
+                  <p className={`text-[12px] sm:text-[13px] font-medium ${t.textSecondary}`}>Peso em Aberto</p>
                   
                   <div className={`flex bg-[#151515] rounded-md border ${t.border} p-0.5 ml-2`}>
                     <button 
@@ -1173,7 +1177,7 @@ function App() {
               </div>
 
               <div className={`${t.card} p-5 md:p-6 rounded-2xl shadow-md flex flex-col justify-center transition-all duration-300`}>
-                <p className={`text-[12px] sm:text-[13px] font-medium ${t.textSecondary} mb-1.5`}>Pedidos na Tela</p>
+                <p className={`text-[12px] sm:text-[13px] font-medium ${t.textSecondary} mb-1.5`}>Pedidos Ativos</p>
                 <p className={`text-2xl md:text-3xl font-bold ${t.textPrimary}`}>{ativosAtual || 0}</p>
               </div>
             </div>
@@ -1182,7 +1186,6 @@ function App() {
               <div className={`flex flex-col lg:flex-row justify-between items-start lg:items-center mb-6 gap-4 border-b ${t.border} pb-5`}>
                 <div>
                   <h2 className={`text-xl font-bold ${t.textPrimary}`}>Controle de Pedidos</h2>
-                  <p className={`text-xs ${t.textSecondary} mt-1`}>O Faturamento Parcial abate automaticamente os valores em aberto.</p>
                 </div>
                 
                 <div className={`flex ${t.innerAlt} rounded-xl border ${t.border} p-1 w-full lg:w-auto`}>
@@ -1200,13 +1203,13 @@ function App() {
               <div className={`flex flex-col xl:flex-row items-center gap-3 w-full mb-6`}>
                  <div className="relative w-full xl:w-64 flex-shrink-0">
                    <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none"><svg className={`w-4 h-4 ${t.textSecondary}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" /></svg></div>
-                   <input type="text" value={termoPesquisa} onChange={(e) => setTermoPesquisa(e.target.value)} placeholder="Buscar pedido, O.C. ou cliente..." className={`w-full pl-9 pr-3 py-3 md:py-2 bg-transparent border ${t.border} rounded-lg text-xs md:text-sm ${t.textPrimary} focus:outline-none focus:border-[#5DD62C]`} />
+                   <input type="text" value={termoPesquisa} onChange={(e) => setTermoPesquisa(e.target.value)} placeholder="Buscar pedido" className={`w-full pl-9 pr-3 py-3 md:py-2 bg-transparent border ${t.border} rounded-lg text-xs md:text-sm ${t.textPrimary} focus:outline-none focus:border-[#5DD62C]`} />
                  </div>
                  
                  <div className="flex flex-col sm:flex-row w-full xl:w-auto justify-between items-stretch sm:items-center gap-3 ml-auto">
                    <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 w-full sm:w-auto">
                      <select value={ordenarPor} onChange={(e) => setOrdenarPor(e.target.value)} className={`w-full sm:w-auto ${t.card} text-xs font-bold ${t.textPrimary} border ${t.border} rounded-lg px-3 py-3 md:py-2 focus:outline-none focus:${t.borderAccent} cursor-pointer`}>
-                       <option value="prazo">Dias Restantes</option><option value="id_pedido">Nº Pedido ERP</option><option value="emissao">Data Emissão</option>
+                       <option value="prazo">Dias Restantes</option><option value="id_pedido">Pedido</option><option value="emissao">Data Emissão</option>
                      </select>
                      <select value={ordem} onChange={(e) => setOrdem(e.target.value)} className={`w-full sm:w-auto ${t.card} text-xs font-bold ${t.textPrimary} border ${t.border} rounded-lg px-3 py-3 md:py-2 focus:outline-none focus:${t.borderAccent} cursor-pointer`}>
                        <option value="asc">Crescente (A-Z)</option><option value="desc">Decrescente (Z-A)</option>
@@ -1238,12 +1241,12 @@ function App() {
                               </button>
                               <div>
                                 <div className="flex items-center gap-2 mb-1.5 flex-wrap">
-                                  <span className={`text-xs ${t.card} ${t.textSecondary} px-2.5 py-0.5 rounded-md font-mono font-bold border ${t.border}`}>Nº {pedido.id_pedido}</span>
-                                  {!isFaturadoGeral && <span className={`text-[11px] px-2 py-0.5 rounded-md font-mono font-bold border ${todasConcluidas ? `${t.bgAccentSoft} ${t.textAccent} ${t.borderAccentSoft}` : `${t.card} ${t.textSecondary} ${t.border}`}`}>OFs Ativas: {concluidas}/{total}</span>}
+                                  <span className={`text-xs ${t.card} ${t.textSecondary} px-2.5 py-0.5 rounded-md font-mono font-bold border ${t.border}`}>PEDIDO {pedido.id_pedido}</span>
+                                  {!isFaturadoGeral && <span className={`text-[11px] px-2 py-0.5 rounded-md font-mono font-bold border ${todasConcluidas ? `${t.bgAccentSoft} ${t.textAccent} ${t.borderAccentSoft}` : `${t.card} ${t.textSecondary} ${t.border}`}`}>OFs Prontas: {concluidas}/{total}</span>}
                                   {isFaturadoGeral && <span className={`text-[11px] px-2 py-0.5 rounded-md font-bold uppercase border bg-gray-500/10 text-gray-400 border-gray-500/20`}>Faturado</span>}
                                 </div>
                                 <h3 className={`font-bold ${t.textPrimary} text-base leading-tight`}>{pedido.cliente}</h3>
-                                {pedido.pedido_cliente && <p className={`text-xs ${t.textAccent} font-mono font-bold mt-1`}>O.C. Cliente: {pedido.pedido_cliente}</p>}
+                                {pedido.pedido_cliente && <p className={`text-xs ${t.textAccent} font-mono font-bold mt-1`}>Pedido Cliente: {pedido.pedido_cliente}</p>}
                                 <p className={`text-[11px] ${t.textSecondary} mt-1`}>{pedido.cidade_bloco} {pedido.endereco_completo ? `• ${pedido.endereco_completo}` : ''}</p>
                               </div>
                             </div>
@@ -1251,12 +1254,12 @@ function App() {
                             <div className={`flex flex-wrap items-center gap-4 md:gap-8 text-xs text-gray-300 w-full md:w-auto justify-between md:justify-end border-t ${t.border} md:border-t-0 pt-4 md:pt-0`}>
                               {!isFaturadoGeral && (
                                  <div className="text-left md:text-center w-[45%] md:w-auto">
-                                   <span className={`block text-[10px] ${t.textSecondary} uppercase tracking-wider mb-0.5`}>Itens Ativos</span>
+                                   <span className={`block text-[10px] ${t.textSecondary} uppercase tracking-wider mb-0.5`}>Itens</span>
                                    <span className={`font-mono font-bold ${t.textPrimary}`}>{pedido.total_itens_abertos || 0}</span>
                                  </div>
                               )}
                               <div className="text-left md:text-center w-[45%] md:w-auto">
-                                <span className={`block text-[10px] ${t.textSecondary} uppercase tracking-wider mb-0.5`}>{isFaturadoGeral ? 'Peso Faturado' : 'Peso Faltante'}</span>
+                                <span className={`block text-[10px] ${t.textSecondary} uppercase tracking-wider mb-0.5`}>{isFaturadoGeral ? 'Peso Faturado' : 'Peso'}</span>
                                 <span className={`font-mono font-bold ${isFaturadoGeral ? t.textSecondary : t.textAccent}`}>{formatarKg(pedido.peso_total_kg)} kg</span>
                               </div>
                               <div className="text-left md:text-center w-[45%] md:w-auto">
@@ -1277,10 +1280,10 @@ function App() {
                                   <table className="w-full text-left border-collapse text-xs min-w-[600px]">
                                     <thead>
                                       <tr className={`border-b ${t.border} ${t.textSecondary} uppercase font-mono`}>
-                                        <th className="py-2.5 px-3">OF (Nº Serial)</th>
+                                        <th className="py-2.5 px-3">OF</th>
                                         <th className="py-2.5 px-3">Referência</th>
-                                        <th className="py-2.5 px-3 text-center">Qtde</th>
-                                        <th className="py-2.5 px-3 text-right">Peso</th>
+                                        <th className="py-2.5 px-3 text-center">Qtde (Restante)</th>
+                                        <th className="py-2.5 px-3 text-right">Peso (Restante)</th>
                                         <th className="py-2.5 px-3 text-center">Status OF</th>
                                       </tr>
                                     </thead>
@@ -1293,13 +1296,14 @@ function App() {
                                           <tr key={idx} className={`${t.hoverCard} transition-colors ${isFaturada ? 'opacity-40 grayscale' : ''}`}>
                                             <td className={`py-3 px-3 font-mono font-bold ${t.textAccent}`}>{numeroOf.toString().startsWith("ITEM") ? numeroOf : `OF ${numeroOf}`}</td>
                                             <td className={`py-3 px-3 font-medium ${t.textPrimary}`}>{item.referencia || item.id_produto || '-'}</td>
-                                            <td className={`py-3 px-3 text-center font-mono ${t.textPrimary}`}>{item.quantidade}</td>
-                                            <td className={`py-3 px-3 text-right font-mono ${t.textAccent}`}>{formatarKg(item.peso_item)} kg</td>
+                                            <td className={`py-3 px-3 text-center font-mono ${t.textPrimary}`}>{Math.round(item.qtd_restante)}</td>
+                                            <td className={`py-3 px-3 text-right font-mono ${t.textAccent}`}>{formatarKg(item.peso_restante)} kg</td>
                                             <td className="py-3 px-3 text-center">
-                                              <select disabled={isFaturadoGeral} value={item.statusOF || 'Pendente'} onChange={(e) => alternarStatusOf(pedido.id, item.id_numof, e.target.value)} className={`text-[10px] font-bold rounded-full px-2.5 py-1.5 border cursor-pointer focus:outline-none ${obterEstiloStatusCompleto(item.statusOF)}`}>
+                                              <select value={item.statusOF || 'Pendente'} onChange={(e) => alternarStatusOf(pedido.id, item.id_numof, e.target.value)} className={`text-[10px] font-bold rounded-full px-2.5 py-1.5 border cursor-pointer focus:outline-none ${obterEstiloStatusCompleto(item.statusOF)}`}>
                                                 <option value="Pendente" className={`${t.card} text-amber-500`}>O Pendente</option>
                                                 <option value="Compras" className={`${t.card} text-sky-500`}>Compras</option>
                                                 <option value="Produção" className={`${t.card} text-purple-500`}>Produção</option>
+                                                <option value="Parcial" className={`${t.card} text-teal-500`}>Parcial</option>
                                                 <option value="Pronto" className={`${t.card} ${t.textAccent}`}>✓ Concluído</option>
                                                 <option value="Faturada" className={`${t.card} text-gray-500`}>Faturada (Entregue)</option>
                                               </select>
@@ -1320,12 +1324,12 @@ function App() {
                             <div className="flex justify-between items-start mb-3 gap-2">
                               <div>
                                 <div className="flex items-center gap-2 flex-wrap mb-2">
-                                  <span className={`text-[11px] ${t.card} ${t.textSecondary} px-2.5 py-0.5 rounded-md font-mono font-bold border ${t.border}`}>Nº {pedido.id_pedido}</span>
+                                  <span className={`text-[11px] ${t.card} ${t.textSecondary} px-2.5 py-0.5 rounded-md font-mono font-bold border ${t.border}`}>PEDIDO {pedido.id_pedido}</span>
                                   {!isFaturadoGeral && <span className={`text-[10px] px-2 py-0.5 rounded-md font-mono font-bold border ${todasConcluidas ? `${t.bgAccentSoft} ${t.textAccent} ${t.borderAccentSoft}` : `${t.card} ${t.textSecondary} ${t.border}`}`}>OFs Ativas: {concluidas}/{total}</span>}
                                   {isFaturadoGeral && <span className={`text-[10px] px-2 py-0.5 rounded-md font-bold uppercase border bg-gray-500/10 text-gray-400 border-gray-500/20`}>Faturado</span>}
                                 </div>
                                 <h3 className={`font-bold ${t.textPrimary} text-base leading-tight`}>{pedido.cliente}</h3>
-                                {pedido.pedido_cliente && <p className={`text-xs ${t.textAccent} font-mono font-bold mt-1`}>O.C. {pedido.pedido_cliente}</p>}
+                                {pedido.pedido_cliente && <p className={`text-xs ${t.textAccent} font-mono font-bold mt-1`}>Pedido Cliente {pedido.pedido_cliente}</p>}
                               </div>
                               <div className="flex-shrink-0">{isFaturadoGeral ? <span className={`text-[11px] font-bold ${t.textSecondary}`}>ENTREGUE</span> : renderizarTagPrazo(pedido.dias_restantes, pedido.data_entrega)}</div>
                             </div>
@@ -1354,15 +1358,16 @@ function App() {
                                         </div>
                                         <div className={`font-bold ${t.textPrimary} truncate`}>{item.referencia || item.id_produto}</div>
                                         <div className={`flex justify-between items-center text-[11px] ${t.textSecondary}`}>
-                                          <span>Qtd: <span className={t.textPrimary}>{item.quantidade}</span></span>
-                                          <span className={`${t.textAccent} font-mono font-bold`}>{formatarKg(item.peso_item)} kg</span>
+                                          <span>Qtd Restante: <span className={t.textPrimary}>{Math.round(item.qtd_restante)}</span></span>
+                                          <span className={`${t.textAccent} font-mono font-bold`}>{formatarKg(item.peso_restante)} kg</span>
                                         </div>
-                                        <select disabled={isFaturadoGeral} value={item.statusOF || 'Pendente'} onChange={(e) => alternarStatusOf(pedido.id, item.id_numof, e.target.value)} className={`w-full py-2 md:py-1.5 mt-1 rounded-md text-[11px] md:text-[10px] font-bold border transition-all cursor-pointer focus:outline-none ${obterEstiloStatusCompleto(item.statusOF)}`}>
-                                          <option value="Pendente" className={`${t.card} text-amber-500`}>O Pendente</option>
+                                        <select value={item.statusOF || 'Pendente'} onChange={(e) => alternarStatusOf(pedido.id, item.id_numof, e.target.value)} className={`w-full py-2 md:py-1.5 mt-1 rounded-md text-[11px] md:text-[10px] font-bold border transition-all cursor-pointer focus:outline-none ${obterEstiloStatusCompleto(item.statusOF)}`}>
+                                          <option value="Pendente" className={`${t.card} text-amber-500`}>Pendente</option>
                                           <option value="Compras" className={`${t.card} text-sky-500`}>Compras</option>
                                           <option value="Produção" className={`${t.card} text-purple-500`}>Produção</option>
-                                          <option value="Pronto" className={`${t.card} ${t.textAccent}`}>✓ Concluído</option>
-                                          <option value="Faturada" className={`${t.card} text-gray-500`}>Faturada (Entregue)</option>
+                                          <option value="Parcial" className={`${t.card} text-teal-500`}>Parcial</option>
+                                          <option value="Pronto" className={`${t.card} ${t.textAccent}`}>Concluído</option>
+                                          <option value="Faturada" className={`${t.card} text-gray-500`}>Faturada</option>
                                         </select>
                                       </div>
                                     )
@@ -1403,11 +1408,11 @@ function App() {
             <div className="space-y-8 w-full">
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4 md:gap-5">
                 <div className={`${t.card} p-5 md:p-6 rounded-2xl shadow-md flex flex-col justify-center`}>
-                  <p className={`text-[13px] font-medium ${t.textSecondary} mb-1.5`}>Valor Total (Aberto)</p>
+                  <p className={`text-[13px] font-medium ${t.textSecondary} mb-1.5`}>Valor Total</p>
                   <p className={`text-2xl md:text-3xl font-bold ${t.textPrimary}`}>R$ {valorTotalComprasAberto.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</p>
                 </div>
                 <div className={`${t.card} p-5 md:p-6 rounded-2xl shadow-md flex flex-col justify-center`}>
-                  <p className={`text-[13px] font-medium ${t.textSecondary} mb-1.5`}>Volume de Chapas</p>
+                  <p className={`text-[13px] font-medium ${t.textSecondary} mb-1.5`}>Peso Total em Compras</p>
                   <p className={`text-2xl md:text-3xl font-bold ${t.textPrimary}`}>{formatarKg(pesoTotalComprasAberto)} <span className={`text-sm md:text-base font-medium ${t.textAccent} ml-1`}>kg</span></p>
                 </div>
                 <div className={`${t.card} p-5 md:p-6 rounded-2xl shadow-md flex flex-col justify-center`}>
@@ -1427,7 +1432,6 @@ function App() {
               
               <div className="space-y-4">
                 <h3 className={`text-lg font-bold ${isDarkMode ? 'text-amber-400' : 'text-amber-600'} flex items-center gap-2`}>
-                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
                   Compras em Aberto ({comprasEmAberto.length})
                 </h3>
                 <div className="grid grid-cols-1 gap-4">
@@ -1508,10 +1512,10 @@ function App() {
               <div className={`${t.card} p-5 md:p-6 rounded-2xl shadow-md`}>
                 <h3 className={`text-lg font-bold ${t.textPrimary} mb-5 border-b ${t.border} pb-2`}>Distribuição de OFs Por Estágio (Kanban)</h3>
                 <div className="space-y-4">
-                  {['Pendente', 'Compras', 'Produção', 'Pronto', 'Faturada'].map(stage => {
+                  {['Pendente', 'Compras', 'Produção', 'Parcial', 'Pronto', 'Faturada'].map(stage => {
                     const totalOFS = Object.values(dadosDashboard.distribuicao_kanban).reduce((a,b)=>a+b,0);
                     const count = dadosDashboard.distribuicao_kanban[stage] || 0;
-                    const color = stage === 'Pronto' ? 'bg-[#5DD62C]' : stage === 'Produção' ? 'bg-purple-500' : stage === 'Compras' ? 'bg-sky-500' : stage === 'Faturada' ? 'bg-gray-500' : 'bg-amber-500';
+                    const color = stage === 'Pronto' ? 'bg-[#5DD62C]' : stage === 'Produção' ? 'bg-purple-500' : stage === 'Compras' ? 'bg-sky-500' : stage === 'Parcial' ? 'bg-teal-500' : stage === 'Faturada' ? 'bg-gray-500' : 'bg-amber-500';
                     return (
                       <div key={stage}>
                         <div className="flex justify-between text-xs font-semibold mb-1.5">

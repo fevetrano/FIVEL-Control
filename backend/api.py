@@ -59,7 +59,6 @@ def init_sqlite_db():
         except sqlite3.OperationalError:
             pass
 
-        # Criação da nova tabela para anotações de Orçamentos
         cur.execute("""
             CREATE TABLE IF NOT EXISTS orcamento_notas (
                 id_orcamento TEXT PRIMARY KEY,
@@ -96,12 +95,15 @@ def safe_update_status(categoria, chave, valor):
     with db_lock:
         conn = get_sqlite_conn()
         cur = conn.cursor()
-        
-        agora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        data_prod = agora if valor == 'Produção' else None
 
-        if valor == 'Produção':
-            cur.execute("SELECT data_producao FROM kanban_status WHERE categoria=? AND chave=?", (categoria, str(chave)))
+        agora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        data_prod = agora if valor == "Produção" else None
+
+        if valor == "Produção":
+            cur.execute(
+                "SELECT data_producao FROM kanban_status WHERE categoria=? AND chave=?",
+                (categoria, str(chave)),
+            )
             row = cur.fetchone()
             if row and row[0]:
                 data_prod = row[0]
@@ -131,11 +133,14 @@ def safe_update_status_lote(categoria, atualizacoes_dict):
         conn = get_sqlite_conn()
         cur = conn.cursor()
         agora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        
+
         for chave, valor in atualizacoes_dict.items():
-            data_prod = agora if valor == 'Produção' else None
-            if valor == 'Produção':
-                cur.execute("SELECT data_producao FROM kanban_status WHERE categoria=? AND chave=?", (categoria, str(chave)))
+            data_prod = agora if valor == "Produção" else None
+            if valor == "Produção":
+                cur.execute(
+                    "SELECT data_producao FROM kanban_status WHERE categoria=? AND chave=?",
+                    (categoria, str(chave)),
+                )
                 row = cur.fetchone()
                 if row and row[0]:
                     data_prod = row[0]
@@ -254,11 +259,19 @@ def obter_pedidos():
                 COALESCE(c.ENT_NUMERO, c.NUMERO) AS NUMERO, COALESCE(NULLIF(TRIM(c.ENT_BAIRRO), ''), c.BAIRRO) AS BAIRRO,
                 i.ID_PRODUTO, i.REFERENCIA, i.QUANT AS QUANTIDADE, i.PESO_TOT AS PESO_ITEM,
                 i.VLUNIT AS PRECO_UNITARIO, i.FECHA, o.ID_NUMOF,
-                (SELECT COUNT(1) 
-                 FROM ITEMNF inf 
-                 JOIN FISCAL f ON (inf.NF = f.NF AND inf.ID_EMPRESA = f.ID_EMPRESA)
-                 WHERE inf.ID_NUMOF = o.ID_NUMOF 
-                   AND (f.CANCELADA IS NULL OR f.CANCELADA <> 'S')) AS OF_FATURADA,
+                (
+                    (SELECT COUNT(1) 
+                     FROM ITEMNF inf 
+                     JOIN FISCAL f ON (inf.NF = f.NF AND inf.ID_EMPRESA = f.ID_EMPRESA)
+                     WHERE inf.ID_NUMOF = o.ID_NUMOF 
+                       AND (f.CANCELADA IS NULL OR f.CANCELADA <> 'S'))
+                    +
+                    (SELECT COUNT(1) 
+                     FROM PFITEM pfi
+                     JOIN RECEBIMENTOS r ON (pfi.ID_PF = r.ID_PF AND pfi.ID_EMPRESA = r.ID_EMPRESA)
+                     WHERE pfi.ID_NUMOF = o.ID_NUMOF 
+                       AND r.TIPOREC = 'RECIBO')
+                ) AS OF_FATURADA,
                 i.COMP, i.LARG, i.ALT, i.ID_ONDAFAB AS ONDA_PEDITEM, i.ID_QUALIDFAB AS QUALID_PEDITEM,
                 ft.GRAMATURA, ft.FECHAMENTO AS FECHA_FT, ft.ID_ONDAFAB AS ONDA_FT, ft.ID_QUALIDFAB AS QUALID_FT,
                 ft.DESCRICAO_COR1, ft.DESCRICAO_COR2, ft.PESO_CONJUNTO
@@ -307,7 +320,9 @@ def obter_pedidos():
                             else dt_entrega if isinstance(dt_entrega, date) else None
                         )
                         if dt_entrega_date:
-                            data_entrega_formatada = dt_entrega_date.strftime("%d/%m/%Y")
+                            data_entrega_formatada = dt_entrega_date.strftime(
+                                "%d/%m/%Y"
+                            )
                             raw_entrega_str = dt_entrega_date.strftime("%Y-%m-%d")
                             dias_restantes = (dt_entrega_date - hoje).days
                     except Exception:
@@ -352,8 +367,14 @@ def obter_pedidos():
                 )
 
                 of_local = status_ofs_local.get(id_of_str, {})
-                status_manual = of_local.get("status") if isinstance(of_local, dict) else None
-                data_producao = of_local.get("data_producao") if isinstance(of_local, dict) else None
+                status_manual = (
+                    of_local.get("status") if isinstance(of_local, dict) else None
+                )
+                data_producao = (
+                    of_local.get("data_producao")
+                    if isinstance(of_local, dict)
+                    else None
+                )
 
                 status_banco = of_status_db.get(id_of_str)
                 of_faturada_no_erp = int(row.get("of_faturada") or 0) > 0
@@ -363,7 +384,9 @@ def obter_pedidos():
                 )
 
                 onda = limpar_texto(row.get("onda_ft") or row.get("onda_peditem"))
-                qualidade = limpar_texto(row.get("qualid_ft") or row.get("qualid_peditem"))
+                qualidade = limpar_texto(
+                    row.get("qualid_ft") or row.get("qualid_peditem")
+                )
                 gramatura = limpar_texto(row.get("gramatura"))
                 fecha_calc = limpar_texto(row.get("fecha_ft") or row.get("fecha"))
                 cor1 = limpar_texto(row.get("descricao_cor1"))
@@ -390,7 +413,7 @@ def obter_pedidos():
                         "cor2": cor2,
                         "comp": row.get("comp"),
                         "larg": row.get("larg"),
-                        "alt": row.get("alt")
+                        "alt": row.get("alt"),
                     }
                 )
                 pedidos_map[id_ped]["total_itens"] = len(pedidos_map[id_ped]["itens"])
@@ -416,19 +439,22 @@ def obter_pedidos():
             if itens_ativos == 0:
                 pedido["status"] = "Faturada"
                 if str(id_ped) in status_pedidos_local:
-                    safe_delete_status("pedidos", id_ped) 
+                    safe_delete_status("pedidos", id_ped)
             else:
                 manual_ped = status_pedidos_local.get(str(id_ped))
                 if manual_ped:
                     pedido["status"] = manual_ped
                 else:
-                    abertos = [i for i in pedido["itens"] if i["statusOF"] != "Faturada"]
-                    if len(abertos) > 0 and all(i["statusOF"] == "Pronto" for i in abertos):
+                    abertos = [
+                        i for i in pedido["itens"] if i["statusOF"] != "Faturada"
+                    ]
+                    if len(abertos) > 0 and all(
+                        i["statusOF"] == "Pronto" for i in abertos
+                    ):
                         pedido["status"] = "Pronto"
                     else:
                         pedido["status"] = "Pendente"
 
-            # AGORA ANEXA TODOS, INCLUSIVE FATURADOS, PARA QUE O FRONTEND POSSA EXIBI-LOS NA ABA "FATURADOS"
             lista_pedidos.append(pedido)
 
         ordenar_por = request.args.get("ordenar_por", "id_pedido").lower()
@@ -466,17 +492,20 @@ def obter_orcamentos():
         conn = get_db_connection()
         cur = conn.cursor()
 
-        # Busca anotações do SQLite
         notas_locais = {}
         with db_lock:
             sqlite_conn = get_sqlite_conn()
             scur = sqlite_conn.cursor()
-            scur.execute("SELECT id_orcamento, anotacao, data_atualizacao FROM orcamento_notas")
+            scur.execute(
+                "SELECT id_orcamento, anotacao, data_atualizacao FROM orcamento_notas"
+            )
             for row in scur.fetchall():
-                notas_locais[str(row[0])] = {"anotacao": row[1], "data_atualizacao": row[2]}
+                notas_locais[str(row[0])] = {
+                    "anotacao": row[1],
+                    "data_atualizacao": row[2],
+                }
             sqlite_conn.close()
 
-        # Puxa orçamentos limitando pela emissão para não sobrecarregar
         query = """
             SELECT 
                 o.ID_ORCAMENTO, o.EMISSAO, o.VALIDADE, o.ID_CLIENTE, o.NOME_CLIENTE,
@@ -492,19 +521,24 @@ def obter_orcamentos():
         cur.execute(query)
         colunas = [desc[0].lower() for desc in cur.description]
         registros = cur.fetchall()
-        
+
         orc_map = {}
         for reg in registros:
             row = dict(zip(colunas, reg))
             id_orc = str(row.get("id_orcamento"))
-            if not id_orc or id_orc == "None": continue
-            
+            if not id_orc or id_orc == "None":
+                continue
+
             if id_orc not in orc_map:
                 dt_emissao = row.get("emissao")
-                raw_emissao_str = dt_emissao.strftime("%Y-%m-%d %H:%M:%S") if isinstance(dt_emissao, (datetime, date)) else str(dt_emissao or "")
-                
+                raw_emissao_str = (
+                    dt_emissao.strftime("%Y-%m-%d %H:%M:%S")
+                    if isinstance(dt_emissao, (datetime, date))
+                    else str(dt_emissao or "")
+                )
+
                 nota_local = notas_locais.get(id_orc, {})
-                
+
                 orc_map[id_orc] = {
                     "id_orcamento": row.get("id_orcamento"),
                     "emissao": format_date_safe(dt_emissao),
@@ -519,31 +553,36 @@ def obter_orcamentos():
                     "total_peso": float(row.get("total_peso") or 0.0),
                     "anotacao": nota_local.get("anotacao", ""),
                     "data_anotacao": nota_local.get("data_atualizacao", ""),
-                    "itens": []
+                    "itens": [],
                 }
-            
+
             if row.get("referencia"):
-                orc_map[id_orc]["itens"].append({
-                    "referencia": limpar_texto(row.get("referencia")),
-                    "modelo": limpar_texto(row.get("modelo_caixa")),
-                    "fechamento": limpar_texto(row.get("fechamento")),
-                    "comp": row.get("comp"), "larg": row.get("larg"), "alt": row.get("alt"),
-                    "quantidade": float(row.get("quant") or 0.0),
-                    "vl_unit": float(row.get("vlunit") or 0.0),
-                    "vl_tot": float(row.get("vltot") or 0.0),
-                    "onda": limpar_texto(row.get("id_ondafab")),
-                    "qualidade": limpar_texto(row.get("id_qualidfab")),
-                    "cor1": limpar_texto(row.get("cor1")),
-                    "cor2": limpar_texto(row.get("cor2")),
-                    "aprovado": limpar_texto(row.get("aprovado"))
-                })
-                
+                orc_map[id_orc]["itens"].append(
+                    {
+                        "referencia": limpar_texto(row.get("referencia")),
+                        "modelo": limpar_texto(row.get("modelo_caixa")),
+                        "fechamento": limpar_texto(row.get("fechamento")),
+                        "comp": row.get("comp"),
+                        "larg": row.get("larg"),
+                        "alt": row.get("alt"),
+                        "quantidade": float(row.get("quant") or 0.0),
+                        "vl_unit": float(row.get("vlunit") or 0.0),
+                        "vl_tot": float(row.get("vltot") or 0.0),
+                        "onda": limpar_texto(row.get("id_ondafab")),
+                        "qualidade": limpar_texto(row.get("id_qualidfab")),
+                        "cor1": limpar_texto(row.get("cor1")),
+                        "cor2": limpar_texto(row.get("cor2")),
+                        "aprovado": limpar_texto(row.get("aprovado")),
+                    }
+                )
+
         return jsonify(list(orc_map.values())), 200
     except Exception as e:
         traceback.print_exc()
         return jsonify({"erro": str(e)}), 500
     finally:
-        if conn: conn.close()
+        if conn:
+            conn.close()
 
 
 @app.route("/api/orcamentos/<int:id_orcamento>/nota", methods=["PUT"])
@@ -552,17 +591,17 @@ def salvar_nota_orcamento(id_orcamento):
         dados = request.get_json() or {}
         nova_nota = dados.get("anotacao", "")
         agora = datetime.now().strftime("%d/%m/%Y %H:%M")
-        
+
         with db_lock:
             conn = get_sqlite_conn()
             cur = conn.cursor()
             cur.execute(
                 "INSERT OR REPLACE INTO orcamento_notas (id_orcamento, anotacao, data_atualizacao) VALUES (?, ?, ?)",
-                (str(id_orcamento), nova_nota, agora)
+                (str(id_orcamento), nova_nota, agora),
             )
             conn.commit()
             conn.close()
-            
+
         return jsonify({"sucesso": True, "data_atualizacao": agora}), 200
     except Exception as e:
         return jsonify({"erro": str(e)}), 500
@@ -637,9 +676,11 @@ def obter_compras():
                 if id_of:
                     id_of_str = str(id_of)
                     of_local = status_ofs_local.get(id_of_str, {})
-                    status_manual = of_local.get("status") if isinstance(of_local, dict) else None
+                    status_manual = (
+                        of_local.get("status") if isinstance(of_local, dict) else None
+                    )
                     status_banco = of_status_db.get(id_of_str)
-                    
+
                     status_of = obter_status_final_of(status_manual, status_banco)
 
                     compras_map[id_compra]["itens_map"][id_item_str]["ofs"].append(
@@ -777,17 +818,43 @@ def obter_resumo_dashboard():
         conn = get_db_connection()
         cur = conn.cursor()
         hoje = datetime.now()
+
+        # 1. Busca NFs
         cur.execute(
-            "SELECT COALESCE(SUM(TOTNOTA),0), COALESCE(SUM(OI_BRUTO),0), COUNT(NF) FROM FISCAL WHERE EMISS_ANO = ? AND EMISS_MES = ? AND ID_EMPRESA IN (1, 2) AND (CANCELADA IS NULL OR CANCELADA <> 'S') AND (IGNORAR_PESO IS NULL OR IGNORAR_PESO <> 'S')",
+            """SELECT COALESCE(SUM(TOTNOTA),0), COALESCE(SUM(OI_BRUTO),0), COUNT(NF) 
+               FROM FISCAL 
+               WHERE EMISS_ANO = ? AND EMISS_MES = ? AND ID_EMPRESA IN (1, 2) 
+                 AND (CANCELADA IS NULL OR CANCELADA <> 'S') 
+                 AND (IGNORAR_PESO IS NULL OR IGNORAR_PESO <> 'S')""",
             (hoje.year, hoje.month),
         )
-        res = cur.fetchone()
+        res_nf = cur.fetchone()
+        fat_nf = float(res_nf[0] or 0.0)
+        peso_nf = float(res_nf[1] or 0.0)
+        qtd_nf = int(res_nf[2] or 0)
+
+        # 2. Busca Recibos
+        cur.execute(
+            """SELECT COALESCE(SUM(i.VALOR), 0), COUNT(DISTINCT r.ID_RECEBIMENTOS)
+               FROM RECEBIMENTOS r
+               JOIN RECEBITENS i ON r.ID_RECEBIMENTOS = i.ID_RECEBIMENTOS
+               WHERE EXTRACT(YEAR FROM r.EMISSAO) = ? 
+                 AND EXTRACT(MONTH FROM r.EMISSAO) = ?
+                 AND r.ID_EMPRESA IN (1, 2)
+                 AND r.TIPOREC = 'RECIBO'
+                 AND (r.CONTABILIZA IS NULL OR r.CONTABILIZA = 'S')""",
+            (hoje.year, hoje.month),
+        )
+        res_rec = cur.fetchone()
+        fat_rec = float(res_rec[0] or 0.0)
+        qtd_rec = int(res_rec[1] or 0)
+
         return (
             jsonify(
                 {
-                    "faturamento_mes": round(float(res[0]), 2),
-                    "peso_mes_kg": round(float(res[1]), 2),
-                    "total_nfs_mes": int(res[2]),
+                    "faturamento_mes": round(fat_nf + fat_rec, 2),
+                    "peso_mes_kg": round(peso_nf, 2),
+                    "total_nfs_mes": qtd_nf + qtd_rec,
                     "mes_referencia": f"{hoje.month:02d}/{hoje.year}",
                 }
             ),
