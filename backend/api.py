@@ -51,11 +51,17 @@ def init_sqlite_db():
                 chave TEXT NOT NULL,
                 status TEXT NOT NULL,
                 data_producao TEXT,
+                qtd_produzida REAL,
                 PRIMARY KEY (categoria, chave)
             )
         """)
         try:
             cur.execute("ALTER TABLE kanban_status ADD COLUMN data_producao TEXT")
+        except sqlite3.OperationalError:
+            pass
+
+        try:
+            cur.execute("ALTER TABLE kanban_status ADD COLUMN qtd_produzida REAL")
         except sqlite3.OperationalError:
             pass
 
@@ -77,21 +83,27 @@ def carregar_kanban_local():
     with db_lock:
         conn = get_sqlite_conn()
         cur = conn.cursor()
-        cur.execute("SELECT categoria, chave, status, data_producao FROM kanban_status")
+        cur.execute(
+            "SELECT categoria, chave, status, data_producao, qtd_produzida FROM kanban_status"
+        )
         rows = cur.fetchall()
         conn.close()
 
         resultado = {"pedidos": {}, "ofs": {}}
-        for cat, chave, st, dp in rows:
+        for cat, chave, st, dp, qp in rows:
             if cat in resultado:
                 if cat == "ofs":
-                    resultado[cat][str(chave)] = {"status": st, "data_producao": dp}
+                    resultado[cat][str(chave)] = {
+                        "status": st,
+                        "data_producao": dp,
+                        "qtd_produzida": qp,
+                    }
                 else:
                     resultado[cat][str(chave)] = st
         return resultado
 
 
-def safe_update_status(categoria, chave, valor):
+def safe_update_status(categoria, chave, valor, qtd_produzida=None):
     with db_lock:
         conn = get_sqlite_conn()
         cur = conn.cursor()
@@ -109,8 +121,8 @@ def safe_update_status(categoria, chave, valor):
                 data_prod = row[0]
 
         cur.execute(
-            "INSERT OR REPLACE INTO kanban_status (categoria, chave, status, data_producao) VALUES (?, ?, ?, ?)",
-            (categoria, str(chave), str(valor), data_prod),
+            "INSERT OR REPLACE INTO kanban_status (categoria, chave, status, data_producao, qtd_produzida) VALUES (?, ?, ?, ?, ?)",
+            (categoria, str(chave), str(valor), data_prod, qtd_produzida),
         )
         conn.commit()
         conn.close()
@@ -146,8 +158,8 @@ def safe_update_status_lote(categoria, atualizacoes_dict):
                     data_prod = row[0]
 
             cur.execute(
-                "INSERT OR REPLACE INTO kanban_status (categoria, chave, status, data_producao) VALUES (?, ?, ?, ?)",
-                (categoria, str(chave), str(valor), data_prod),
+                "INSERT OR REPLACE INTO kanban_status (categoria, chave, status, data_producao, qtd_produzida) VALUES (?, ?, ?, ?, COALESCE((SELECT qtd_produzida FROM kanban_status WHERE categoria=? AND chave=?), NULL))",
+                (categoria, str(chave), str(valor), data_prod, categoria, str(chave)),
             )
         conn.commit()
         conn.close()
@@ -206,11 +218,15 @@ def build_of_db_status_map(cur):
     return _of_status_cache
 
 
-def obter_status_final_of(status_manual, status_banco, tem_nf=False):
-    if tem_nf:
-        return "Faturada"
+def obter_status_final_of(
+    status_manual, status_banco, is_faturada_total, is_faturada_parcial
+):
     if status_manual:
         return status_manual
+    if is_faturada_total:
+        return "Faturada"
+    if is_faturada_parcial:
+        return "Parcial"
     if status_banco:
         return status_banco
     return "Pendente"
@@ -250,37 +266,45 @@ def obter_pedidos():
         status_pedidos_local = kanban_local.get("pedidos", {})
         status_ofs_local = kanban_local.get("ofs", {})
 
+        # Query de OFs com filtro direto da fábrica
         query = """
             SELECT 
-                p.ID_NUMPED AS ID_PEDIDO, p.PEDIDO_CLIENTE, p.EMISSAO, p.DATA_ENTREGA AS PRAZO,
+                p.ID_NUMPED AS ID_PEDIDO, p.PEDIDO_CLIENTE, p.EMISSAO, p.DATA_ENTREGA AS PRAZO_PEDIDO, p.ID_EMPRESA,
                 p.TOTAL_PESO AS PESO_TOTAL_PEDIDO, p.TOTAL_GERAL, c.NOME AS CLIENTE_RAZAO,
                 COALESCE(c.GUERRA, c.NOME) AS CLIENTE_FANTASIA, COALESCE(NULLIF(TRIM(c.ENT_CIDADE), ''), c.CIDADE) AS CIDADE,
                 COALESCE(NULLIF(TRIM(c.ENT_ENDERECO), ''), c.ENDERECO) AS ENDERECO,
                 COALESCE(c.ENT_NUMERO, c.NUMERO) AS NUMERO, COALESCE(NULLIF(TRIM(c.ENT_BAIRRO), ''), c.BAIRRO) AS BAIRRO,
-                i.ID_PRODUTO, i.REFERENCIA, i.QUANT AS QUANTIDADE, i.PESO_TOT AS PESO_ITEM,
-                i.VLUNIT AS PRECO_UNITARIO, i.FECHA, o.ID_NUMOF,
+                i.ID_PRODUTO, i.REFERENCIA, i.QUANT AS QTD_ITEM_TOTAL, i.PESO_TOT AS PESO_ITEM_TOTAL,
+                i.VLUNIT AS PRECO_UNITARIO, i.FECHA,
+                o.ID_NUMOF, o.QTDPROG AS QTD_OF_PROG, o.DTPROG AS DTPROG_OF,
                 (
-                    (SELECT COUNT(1) 
+                    COALESCE((SELECT SUM(inf.QUANT) 
                      FROM ITEMNF inf 
                      JOIN FISCAL f ON (inf.NF = f.NF AND inf.ID_EMPRESA = f.ID_EMPRESA)
                      WHERE inf.ID_NUMOF = o.ID_NUMOF 
-                       AND (f.CANCELADA IS NULL OR f.CANCELADA <> 'S'))
+                       AND (f.CANCELADA IS NULL OR f.CANCELADA <> 'S')), 0)
                     +
-                    (SELECT COUNT(1) 
+                    COALESCE((SELECT SUM(pfi.QUANT) 
                      FROM PFITEM pfi
                      JOIN RECEBIMENTOS r ON (pfi.ID_PF = r.ID_PF AND pfi.ID_EMPRESA = r.ID_EMPRESA)
                      WHERE pfi.ID_NUMOF = o.ID_NUMOF 
-                       AND r.TIPOREC = 'RECIBO')
-                ) AS OF_FATURADA,
+                       AND r.TIPOREC = 'RECIBO'), 0)
+                ) AS QTD_JA_FATURADA_OF,
                 i.COMP, i.LARG, i.ALT, i.ID_ONDAFAB AS ONDA_PEDITEM, i.ID_QUALIDFAB AS QUALID_PEDITEM,
                 ft.GRAMATURA, ft.FECHAMENTO AS FECHA_FT, ft.ID_ONDAFAB AS ONDA_FT, ft.ID_QUALIDFAB AS QUALID_FT,
-                ft.DESCRICAO_COR1, ft.DESCRICAO_COR2, ft.PESO_CONJUNTO
+                ft.DESCRICAO_COR1, ft.DESCRICAO_COR2
             FROM PEDIDOS p
             LEFT JOIN CLIENTES c ON p.ID_CLIENTE = c.ID_CLIENTE
-            LEFT JOIN PEDITEM i ON p.ID_NUMPED = i.ID_NUMPED
+            JOIN PEDITEM i ON p.ID_NUMPED = i.ID_NUMPED
             LEFT JOIN ORDFAB o ON (o.ID_NUMPED = i.ID_NUMPED AND o.ID_PRODUTO = i.ID_PRODUTO)
             LEFT JOIN FT ft ON (i.ID_PRODUTO = ft.ID_PRODUTO AND ft.DESATIVADO <> 'S')
-            WHERE p.EMISSAO >= '2026-07-01'
+            WHERE (p.EMISSAO >= '2026-07-01' OR p.DATA_ENTREGA >= '2026-07-01' OR o.DTPROG >= '2026-07-01')
+              AND p.ID_EMPRESA IN (1, 2)
+              AND (p.CANCELADO IS NULL OR p.CANCELADO <> 'S')
+              AND (p.PEDIDO_BLOQUEADO IS NULL OR p.PEDIDO_BLOQUEADO <> 'S')
+              AND (p.DESATIVADO IS NULL OR p.DESATIVADO <> 'S')
+              AND (o.DESATIVADO IS NULL OR o.DESATIVADO <> 'S')
+              AND (o.LIQUIDADO IS NULL OR o.LIQUIDADO <> 'S')
               AND p.ID_NUMPED <> 15931
             ORDER BY p.ID_NUMPED DESC;
         """
@@ -307,27 +331,6 @@ def obter_pedidos():
                     else str(dt_emissao or "")
                 )
 
-                dt_entrega = row.get("prazo")
-                data_entrega_formatada = ""
-                raw_entrega_str = ""
-                dias_restantes = 999999
-
-                if dt_entrega:
-                    try:
-                        dt_entrega_date = (
-                            dt_entrega.date()
-                            if isinstance(dt_entrega, datetime)
-                            else dt_entrega if isinstance(dt_entrega, date) else None
-                        )
-                        if dt_entrega_date:
-                            data_entrega_formatada = dt_entrega_date.strftime(
-                                "%d/%m/%Y"
-                            )
-                            raw_entrega_str = dt_entrega_date.strftime("%Y-%m-%d")
-                            dias_restantes = (dt_entrega_date - hoje).days
-                    except Exception:
-                        pass
-
                 partes_end = [
                     limpar_texto(row.get("endereco")),
                     str(row.get("numero") or ""),
@@ -343,117 +346,201 @@ def obter_pedidos():
                 pedidos_map[id_ped] = {
                     "id": id_ped,
                     "id_pedido": int(id_ped),
+                    "id_empresa": row.get("id_empresa"),
                     "pedido_cliente": limpar_texto(row.get("pedido_cliente")),
                     "cliente": cliente_final,
                     "cidade_bloco": limpar_texto(row.get("cidade")),
                     "endereco_completo": endereco_comp,
                     "data_emissao": data_emissao_formatada,
                     "raw_emissao": raw_emissao_str,
-                    "data_entrega": data_entrega_formatada,
-                    "raw_entrega": raw_entrega_str,
-                    "dias_restantes": (
-                        dias_restantes if dias_restantes != 999999 else None
-                    ),
-                    "total_itens": 0,
+                    "data_entrega": "",
+                    "raw_entrega": "",
+                    "dias_restantes": 999999,
                     "itens": [],
+                    "has_faturado_of": False,
+                    "has_ativa_of": False,
                 }
 
-            if row.get("id_produto") or row.get("id_numof"):
-                id_of_val = row.get("id_numof")
-                id_of_str = (
-                    str(id_of_val)
-                    if id_of_val is not None
-                    else f"ITEM-{len(pedidos_map[id_ped]['itens']) + 1}"
-                )
+            id_of_val = row.get("id_numof")
+            prod_id = str(row.get("id_produto") or "PROD")
+            id_of_str = str(id_of_val) if id_of_val is not None else f"ITEM-{prod_id}"
 
-                of_local = status_ofs_local.get(id_of_str, {})
-                status_manual = (
-                    of_local.get("status") if isinstance(of_local, dict) else None
-                )
-                data_producao = (
-                    of_local.get("data_producao")
-                    if isinstance(of_local, dict)
-                    else None
-                )
+            # 1. MATEMÁTICA PURA DE PESO (Usando a Venda como Verdade Absoluta)
+            qtd_item_total = float(row.get("qtd_item_total") or 0.0)
+            peso_item_total = float(row.get("peso_item_total") or 0.0)
+            # Pega o peso de 1 única caixa exatamente como foi vendida
+            peso_unitario_real = (
+                (peso_item_total / qtd_item_total) if qtd_item_total > 0 else 0.0
+            )
 
-                status_banco = of_status_db.get(id_of_str)
-                of_faturada_no_erp = int(row.get("of_faturada") or 0) > 0
+            # 2. Aplica o peso unitário exato na Quantidade da OF
+            qtd_of = float(row.get("qtd_of_prog") or qtd_item_total)
+            peso_of = qtd_of * peso_unitario_real
 
-                status_of = obter_status_final_of(
-                    status_manual, status_banco, of_faturada_no_erp
-                )
+            preco_unitario = float(row.get("preco_unitario") or 0.0)
+            qtd_faturada_of = float(row.get("qtd_ja_faturada_of") or 0.0)
 
-                onda = limpar_texto(row.get("onda_ft") or row.get("onda_peditem"))
-                qualidade = limpar_texto(
-                    row.get("qualid_ft") or row.get("qualid_peditem")
-                )
-                gramatura = limpar_texto(row.get("gramatura"))
-                fecha_calc = limpar_texto(row.get("fecha_ft") or row.get("fecha"))
-                cor1 = limpar_texto(row.get("descricao_cor1"))
-                cor2 = limpar_texto(row.get("descricao_cor2"))
-                peso_conj = row.get("peso_conjunto")
+            # 3. Tolerância de 10% para Liquidação Automática
+            is_faturada_total = False
+            is_faturada_parcial = False
 
-                pedidos_map[id_ped]["itens"].append(
-                    {
-                        "id_numof": id_of_val,
-                        "id_produto": limpar_texto(row.get("id_produto")),
-                        "referencia": limpar_texto(row.get("referencia")),
-                        "quantidade": float(row.get("quantidade") or 0.0),
-                        "peso_item": float(row.get("peso_item") or 0.0),
-                        "peso_conjunto": float(peso_conj or 0.0),
-                        "preco_unitario": float(row.get("preco_unitario") or 0.0),
-                        "fecha": fecha_calc,
-                        "concluido": (status_of == "Pronto" or status_of == "Faturada"),
-                        "statusOF": status_of,
-                        "data_producao": data_producao,
-                        "onda": onda,
-                        "qualidade": qualidade,
-                        "gramatura": gramatura,
-                        "cor1": cor1,
-                        "cor2": cor2,
-                        "comp": row.get("comp"),
-                        "larg": row.get("larg"),
-                        "alt": row.get("alt"),
-                    }
-                )
-                pedidos_map[id_ped]["total_itens"] = len(pedidos_map[id_ped]["itens"])
+            if qtd_of > 0:
+                if qtd_faturada_of >= (qtd_of * 0.90):
+                    is_faturada_total = True
+                elif qtd_faturada_of > 0:
+                    is_faturada_parcial = True
+            elif qtd_faturada_of > 0:
+                is_faturada_total = True
+
+            of_local = status_ofs_local.get(id_of_str, {})
+            status_manual = (
+                of_local.get("status") if isinstance(of_local, dict) else None
+            )
+            data_producao = (
+                of_local.get("data_producao") if isinstance(of_local, dict) else None
+            )
+            qtd_produzida_real = (
+                of_local.get("qtd_produzida") if isinstance(of_local, dict) else None
+            )
+
+            status_banco = of_status_db.get(id_of_str)
+
+            status_of = obter_status_final_of(
+                status_manual, status_banco, is_faturada_total, is_faturada_parcial
+            )
+
+            if status_of == "Faturada":
+                qtd_restante_of = 0.0
+                peso_restante_of = 0.0
+                pedidos_map[id_ped]["has_faturado_of"] = True
+            else:
+                qtd_restante_of = max(0.0, qtd_of - qtd_faturada_of)
+                peso_restante_of = qtd_restante_of * peso_unitario_real
+                pedidos_map[id_ped]["has_ativa_of"] = True
+
+            if qtd_faturada_of > 0:
+                pedidos_map[id_ped]["has_faturado_of"] = True
+
+            # 4. Data e Prazo individuais da OF
+            dtprog_of = row.get("dtprog_of") or row.get("prazo_pedido")
+            data_of_formatada = ""
+            raw_of_date_str = ""
+            dias_restantes_of = 999999
+
+            if dtprog_of:
+                try:
+                    dt_of_date = (
+                        dtprog_of.date()
+                        if isinstance(dtprog_of, datetime)
+                        else dtprog_of if isinstance(dtprog_of, date) else None
+                    )
+                    if dt_of_date:
+                        data_of_formatada = dt_of_date.strftime("%d/%m/%Y")
+                        raw_of_date_str = dt_of_date.strftime("%Y-%m-%d")
+                        dias_restantes_of = (dt_of_date - hoje).days
+                except Exception:
+                    pass
+
+            # Atualiza o prazo do pedido para a próxima OF ativa
+            if (
+                status_of != "Faturada"
+                and dias_restantes_of < pedidos_map[id_ped]["dias_restantes"]
+            ):
+                pedidos_map[id_ped]["dias_restantes"] = dias_restantes_of
+                pedidos_map[id_ped]["data_entrega"] = data_of_formatada
+                pedidos_map[id_ped]["raw_entrega"] = raw_of_date_str
+
+            onda = limpar_texto(row.get("onda_ft") or row.get("onda_peditem"))
+            qualidade = limpar_texto(row.get("qualid_ft") or row.get("qualid_peditem"))
+            gramatura = limpar_texto(row.get("gramatura"))
+            fecha_calc = limpar_texto(row.get("fecha_ft") or row.get("fecha"))
+            cor1 = limpar_texto(row.get("descricao_cor1"))
+            cor2 = limpar_texto(row.get("descricao_cor2"))
+
+            pedidos_map[id_ped]["itens"].append(
+                {
+                    "id_numof": id_of_val,
+                    "id_produto": prod_id,
+                    "referencia": limpar_texto(row.get("referencia")),
+                    "qtd_prog": qtd_of,
+                    "qtd_restante": qtd_restante_of,
+                    "peso_of": peso_of,
+                    "peso_restante": peso_restante_of,
+                    "preco_unitario": preco_unitario,
+                    "fecha": fecha_calc,
+                    "concluido": (status_of in ["Pronto", "Faturada"]),
+                    "statusOF": status_of,
+                    "data_producao": data_producao,
+                    "qtd_produzida": qtd_produzida_real,
+                    "data_programada": data_of_formatada,
+                    "raw_dtprog": raw_of_date_str,
+                    "dias_restantes_of": (
+                        dias_restantes_of if dias_restantes_of != 999999 else None
+                    ),
+                    "onda": onda,
+                    "qualidade": qualidade,
+                    "gramatura": gramatura,
+                    "cor1": cor1,
+                    "cor2": cor2,
+                    "comp": row.get("comp"),
+                    "larg": row.get("larg"),
+                    "alt": row.get("alt"),
+                }
+            )
 
         lista_pedidos = []
         for id_ped, pedido in pedidos_map.items():
-            peso_aberto = 0.0
-            valor_aberto = 0.0
-            itens_ativos = 0
+            if pedido["dias_restantes"] == 999999:
+                pedido["dias_restantes"] = None
+
+            peso_aberto_pedido = 0.0
+            valor_aberto_pedido = 0.0
+            itens_ativos_pedido = 0
 
             for item in pedido["itens"]:
                 if item["statusOF"] != "Faturada":
-                    peso_aberto += float(item["peso_item"] or 0.0)
-                    valor_aberto += float(item["quantidade"] or 0.0) * float(
+                    # Hierarquia de Qtd: Se tiver Lançamento Manual (qtd_produzida), usa ele para recalcular.
+                    qtd_calc = (
+                        float(item["qtd_produzida"])
+                        if item["qtd_produzida"] not in [None, ""]
+                        else float(item["qtd_restante"] or 0.0)
+                    )
+                    peso_unit = (
+                        float(item["peso_of"] / item["qtd_prog"])
+                        if float(item["qtd_prog"] or 0.0) > 0
+                        else 0.0
+                    )
+
+                    peso_aberto_pedido += qtd_calc * peso_unit
+                    valor_aberto_pedido += qtd_calc * float(
                         item["preco_unitario"] or 0.0
                     )
-                    itens_ativos += 1
+                    itens_ativos_pedido += 1
 
-            pedido["peso_total_kg"] = round(peso_aberto, 2)
-            pedido["faturamento_total"] = round(valor_aberto, 2)
-            pedido["total_itens_abertos"] = itens_ativos
+            # Mantém em RAW float para exibir as decimais exatas no Frontend
+            pedido["peso_total_kg"] = peso_aberto_pedido
+            pedido["faturamento_total"] = valor_aberto_pedido
+            pedido["total_itens_abertos"] = itens_ativos_pedido
 
-            if itens_ativos == 0:
+            # Alerta de Entrega Parcial
+            pedido["has_entrega_parcial"] = (
+                pedido["has_faturado_of"] and pedido["has_ativa_of"]
+            )
+
+            del pedido["has_faturado_of"], pedido["has_ativa_of"]
+
+            # Controle de Status Final do Pedido
+            manual_ped = status_pedidos_local.get(str(id_ped))
+            if manual_ped:
+                pedido["status"] = manual_ped
+            elif itens_ativos_pedido == 0:
                 pedido["status"] = "Faturada"
-                if str(id_ped) in status_pedidos_local:
-                    safe_delete_status("pedidos", id_ped)
             else:
-                manual_ped = status_pedidos_local.get(str(id_ped))
-                if manual_ped:
-                    pedido["status"] = manual_ped
+                abertos = [i for i in pedido["itens"] if i["statusOF"] != "Faturada"]
+                if len(abertos) > 0 and all(i["statusOF"] == "Pronto" for i in abertos):
+                    pedido["status"] = "Pronto"
                 else:
-                    abertos = [
-                        i for i in pedido["itens"] if i["statusOF"] != "Faturada"
-                    ]
-                    if len(abertos) > 0 and all(
-                        i["statusOF"] == "Pronto" for i in abertos
-                    ):
-                        pedido["status"] = "Pronto"
-                    else:
-                        pedido["status"] = "Pendente"
+                    pedido["status"] = "Pendente"
 
             lista_pedidos.append(pedido)
 
@@ -681,7 +768,9 @@ def obter_compras():
                     )
                     status_banco = of_status_db.get(id_of_str)
 
-                    status_of = obter_status_final_of(status_manual, status_banco)
+                    status_of = obter_status_final_of(
+                        status_manual, status_banco, False, False
+                    )
 
                     compras_map[id_compra]["itens_map"][id_item_str]["ofs"].append(
                         {
@@ -757,7 +846,16 @@ def atualizar_status_unidade(id_pedido):
 @app.route("/api/pedidos/<int:id_pedido>/itens/<path:id_of>/status", methods=["PUT"])
 def atualizar_status_of(id_pedido, id_of):
     try:
-        safe_update_status("ofs", id_of, request.get_json().get("status", "Pendente"))
+        dados = request.get_json() or {}
+        novo_status = dados.get("status", "Pendente")
+        qtd_produzida = dados.get("qtd_produzida")
+        qtd_val = (
+            float(qtd_produzida)
+            if qtd_produzida is not None and str(qtd_produzida).strip() != ""
+            else None
+        )
+
+        safe_update_status("ofs", id_of, novo_status, qtd_val)
         return jsonify({"sucesso": True}), 200
     except Exception as e:
         return jsonify({"erro": str(e)}), 500
@@ -768,9 +866,16 @@ def atualizar_status_rapido_of():
     try:
         dados = request.get_json() or {}
         id_of, novo_status = dados.get("id_of"), dados.get("status")
+        qtd_produzida = dados.get("qtd_produzida")
         if not id_of or not novo_status:
             return jsonify({"erro": "Obrigatórios"}), 400
-        safe_update_status("ofs", id_of, novo_status)
+
+        qtd_val = (
+            float(qtd_produzida)
+            if qtd_produzida is not None and str(qtd_produzida).strip() != ""
+            else None
+        )
+        safe_update_status("ofs", id_of, novo_status, qtd_val)
         return jsonify({"sucesso": True}), 200
     except Exception as e:
         return jsonify({"erro": str(e)}), 500
@@ -796,12 +901,31 @@ def obter_resumo_mapa():
         conn = get_db_connection()
         cur = conn.cursor()
         hoje = datetime.now()
+
         cur.execute(
-            "SELECT COALESCE(SUM(OI_BRUTO), 0) FROM FISCAL WHERE EMISS_ANO = ? AND EMISS_MES = ? AND ID_EMPRESA IN (1, 2) AND (CANCELADA IS NULL OR CANCELADA <> 'S') AND (IGNORAR_PESO IS NULL OR IGNORAR_PESO <> 'S')",
+            """SELECT COALESCE(SUM(OI_BRUTO), 0) FROM FISCAL 
+               WHERE EMISS_ANO = ? AND EMISS_MES = ? AND ID_EMPRESA IN (1, 2) 
+                 AND (CANCELADA IS NULL OR CANCELADA <> 'S') 
+                 AND (IGNORAR_PESO IS NULL OR IGNORAR_PESO <> 'S')""",
             (hoje.year, hoje.month),
         )
+        peso_nfs = float(cur.fetchone()[0] or 0.0)
+
+        cur.execute(
+            """SELECT COALESCE(SUM(pfi.PESOTOTAL), 0)
+               FROM RECEBIMENTOS r
+               JOIN PFITEM pfi ON pfi.ID_PF = r.ID_PF AND pfi.ID_EMPRESA = r.ID_EMPRESA
+               WHERE EXTRACT(YEAR FROM r.EMISSAO) = ? 
+                 AND EXTRACT(MONTH FROM r.EMISSAO) = ?
+                 AND r.ID_EMPRESA IN (1, 2)
+                 AND r.TIPOREC = 'RECIBO'
+                 AND (r.CONTABILIZA IS NULL OR r.CONTABILIZA = 'S')""",
+            (hoje.year, hoje.month),
+        )
+        peso_recs = float(cur.fetchone()[0] or 0.0)
+
         return (
-            jsonify({"peso_entregue_mes_kg": round(float(cur.fetchone()[0]), 2)}),
+            jsonify({"peso_entregue_mes_kg": peso_nfs + peso_recs}),
             200,
         )
     except Exception as e:
@@ -819,42 +943,110 @@ def obter_resumo_dashboard():
         cur = conn.cursor()
         hoje = datetime.now()
 
-        # 1. Busca NFs
+        # Ruycepel (ID 1)
         cur.execute(
-            """SELECT COALESCE(SUM(TOTNOTA),0), COALESCE(SUM(OI_BRUTO),0), COUNT(NF) 
-               FROM FISCAL 
-               WHERE EMISS_ANO = ? AND EMISS_MES = ? AND ID_EMPRESA IN (1, 2) 
-                 AND (CANCELADA IS NULL OR CANCELADA <> 'S') 
-                 AND (IGNORAR_PESO IS NULL OR IGNORAR_PESO <> 'S')""",
+            """SELECT COALESCE(SUM(TOTNOTA),0), COALESCE(SUM(TOTIPI),0), COALESCE(SUM(OI_BRUTO),0), COUNT(NF) 
+                       FROM FISCAL 
+                       WHERE EMISS_ANO = ? AND EMISS_MES = ? AND ID_EMPRESA = 1 
+                         AND (CANCELADA IS NULL OR CANCELADA <> 'S') 
+                         AND (IGNORAR_PESO IS NULL OR IGNORAR_PESO <> 'S')""",
             (hoje.year, hoje.month),
         )
-        res_nf = cur.fetchone()
-        fat_nf = float(res_nf[0] or 0.0)
-        peso_nf = float(res_nf[1] or 0.0)
-        qtd_nf = int(res_nf[2] or 0)
+        row1_nf = cur.fetchone()
 
-        # 2. Busca Recibos
         cur.execute(
             """SELECT COALESCE(SUM(i.VALOR), 0), COUNT(DISTINCT r.ID_RECEBIMENTOS)
-               FROM RECEBIMENTOS r
-               JOIN RECEBITENS i ON r.ID_RECEBIMENTOS = i.ID_RECEBIMENTOS
-               WHERE EXTRACT(YEAR FROM r.EMISSAO) = ? 
-                 AND EXTRACT(MONTH FROM r.EMISSAO) = ?
-                 AND r.ID_EMPRESA IN (1, 2)
-                 AND r.TIPOREC = 'RECIBO'
-                 AND (r.CONTABILIZA IS NULL OR r.CONTABILIZA = 'S')""",
+                       FROM RECEBIMENTOS r
+                       JOIN RECEBITENS i ON r.ID_RECEBIMENTOS = i.ID_RECEBIMENTOS
+                       WHERE EXTRACT(YEAR FROM r.EMISSAO) = ? AND EXTRACT(MONTH FROM r.EMISSAO) = ?
+                         AND r.ID_EMPRESA = 1 AND r.TIPOREC = 'RECIBO' AND (r.CONTABILIZA IS NULL OR r.CONTABILIZA = 'S')""",
             (hoje.year, hoje.month),
         )
-        res_rec = cur.fetchone()
-        fat_rec = float(res_rec[0] or 0.0)
-        qtd_rec = int(res_rec[1] or 0)
+        row1_rec = cur.fetchone()
+
+        cur.execute(
+            """SELECT COALESCE(SUM(pfi.PESOTOTAL), 0) FROM RECEBIMENTOS r JOIN PFITEM pfi ON pfi.ID_PF = r.ID_PF AND pfi.ID_EMPRESA = r.ID_EMPRESA WHERE EXTRACT(YEAR FROM r.EMISSAO) = ? AND EXTRACT(MONTH FROM r.EMISSAO) = ? AND r.ID_EMPRESA = 1 AND r.TIPOREC = 'RECIBO' AND (r.CONTABILIZA IS NULL OR r.CONTABILIZA = 'S')""",
+            (hoje.year, hoje.month),
+        )
+        peso1_rec = float(cur.fetchone()[0] or 0.0)
+
+        # Elly (ID 2)
+        cur.execute(
+            """SELECT COALESCE(SUM(TOTNOTA),0), COALESCE(SUM(TOTIPI),0), COALESCE(SUM(OI_BRUTO),0), COUNT(NF) 
+                       FROM FISCAL 
+                       WHERE EMISS_ANO = ? AND EMISS_MES = ? AND ID_EMPRESA = 2 
+                         AND (CANCELADA IS NULL OR CANCELADA <> 'S') 
+                         AND (IGNORAR_PESO IS NULL OR IGNORAR_PESO <> 'S')""",
+            (hoje.year, hoje.month),
+        )
+        row2_nf = cur.fetchone()
+
+        cur.execute(
+            """SELECT COALESCE(SUM(i.VALOR), 0), COUNT(DISTINCT r.ID_RECEBIMENTOS)
+                       FROM RECEBIMENTOS r
+                       JOIN RECEBITENS i ON r.ID_RECEBIMENTOS = i.ID_RECEBIMENTOS
+                       WHERE EXTRACT(YEAR FROM r.EMISSAO) = ? AND EXTRACT(MONTH FROM r.EMISSAO) = ?
+                         AND r.ID_EMPRESA = 2 AND r.TIPOREC = 'RECIBO' AND (r.CONTABILIZA IS NULL OR r.CONTABILIZA = 'S')""",
+            (hoje.year, hoje.month),
+        )
+        row2_rec = cur.fetchone()
+
+        cur.execute(
+            """SELECT COALESCE(SUM(pfi.PESOTOTAL), 0) FROM RECEBIMENTOS r JOIN PFITEM pfi ON pfi.ID_PF = r.ID_PF AND pfi.ID_EMPRESA = r.ID_EMPRESA WHERE EXTRACT(YEAR FROM r.EMISSAO) = ? AND EXTRACT(MONTH FROM r.EMISSAO) = ? AND r.ID_EMPRESA = 2 AND r.TIPOREC = 'RECIBO' AND (r.CONTABILIZA IS NULL OR r.CONTABILIZA = 'S')""",
+            (hoje.year, hoje.month),
+        )
+        peso2_rec = float(cur.fetchone()[0] or 0.0)
+
+        e1_tot_nota, e1_tot_ipi, e1_peso_nf, e1_qtd_nf = (
+            float(row1_nf[0] or 0),
+            float(row1_nf[1] or 0),
+            float(row1_nf[2] or 0),
+            int(row1_nf[3] or 0),
+        )
+        e1_fat_rec, e1_qtd_rec = float(row1_rec[0] or 0), int(row1_rec[1] or 0)
+
+        e2_tot_nota, e2_tot_ipi, e2_peso_nf, e2_qtd_nf = (
+            float(row2_nf[0] or 0),
+            float(row2_nf[1] or 0),
+            float(row2_nf[2] or 0),
+            int(row2_nf[3] or 0),
+        )
+        e2_fat_rec, e2_qtd_rec = float(row2_rec[0] or 0), int(row2_rec[1] or 0)
 
         return (
             jsonify(
                 {
-                    "faturamento_mes": round(fat_nf + fat_rec, 2),
-                    "peso_mes_kg": round(peso_nf, 2),
-                    "total_nfs_mes": qtd_nf + qtd_rec,
+                    "ruycepel": {
+                        "com_ipi": round(e1_tot_nota + e1_fat_rec, 2),
+                        "sem_ipi": round((e1_tot_nota - e1_tot_ipi) + e1_fat_rec, 2),
+                        "peso_mes_kg": round(e1_peso_nf + peso1_rec, 2),
+                        "total_nfs_mes": e1_qtd_nf + e1_qtd_rec,
+                    },
+                    "elly": {
+                        "com_ipi": round(e2_tot_nota + e2_fat_rec, 2),
+                        "sem_ipi": round((e2_tot_nota - e2_tot_ipi) + e2_fat_rec, 2),
+                        "peso_mes_kg": round(e2_peso_nf + peso2_rec, 2),
+                        "total_nfs_mes": e2_qtd_nf + e2_qtd_rec,
+                    },
+                    "total": {
+                        "com_ipi": round(
+                            e1_tot_nota + e1_fat_rec + e2_tot_nota + e2_fat_rec, 2
+                        ),
+                        "sem_ipi": round(
+                            (e1_tot_nota - e1_tot_ipi)
+                            + e1_fat_rec
+                            + (e2_tot_nota - e2_tot_ipi)
+                            + e2_fat_rec,
+                            2,
+                        ),
+                        "peso_mes_kg": round(
+                            e1_peso_nf + peso1_rec + e2_peso_nf + peso2_rec, 2
+                        ),
+                        "total_nfs_mes": e1_qtd_nf
+                        + e1_qtd_rec
+                        + e2_qtd_nf
+                        + e2_qtd_rec,
+                    },
                     "mes_referencia": f"{hoje.month:02d}/{hoje.year}",
                 }
             ),

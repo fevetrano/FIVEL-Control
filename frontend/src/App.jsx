@@ -39,7 +39,9 @@ function App() {
   const [limiteExibicao, setLimiteExibicao] = useState(20)
   
   const [modoPesoAberto, setModoPesoAberto] = useState('total');
-  const [filtroStatusPedido, setFiltroStatusPedido] = useState('aberto'); // Aberto vs Faturado
+  const [filtroStatusPedido, setFiltroStatusPedido] = useState('aberto');
+  const [mostrarIPI, setMostrarIPI] = useState(false); 
+  const [empresaFiltro, setEmpresaFiltro] = useState('total'); 
   
   const [resumoMapa, setResumoMapa] = useState({ 
     faturamento_pronto: 0, 
@@ -48,13 +50,13 @@ function App() {
   })
   
   const [dadosDashboard, setDadosDashboard] = useState({
-    faturamento_mes: 0, 
-    peso_mes_kg: 0, 
-    total_nfs_mes: 0,
+    ruycepel: { com_ipi: 0, sem_ipi: 0, peso_mes_kg: 0, total_nfs_mes: 0 },
+    elly: { com_ipi: 0, sem_ipi: 0, peso_mes_kg: 0, total_nfs_mes: 0 },
+    total: { com_ipi: 0, sem_ipi: 0, peso_mes_kg: 0, total_nfs_mes: 0 },
     faturamento_carteira: 0, 
     peso_carteira_kg: 0, 
     total_pedidos_carteira: 0,
-    distribuicao_kanban: { Pendente: 0, Compras: 0, Produção: 0, Pronto: 0, Parcial: 0, Faturada: 0 },
+    distribuicao_kanban: { Pendente: 0, Compras: 0, Produção: 0, Parcial: 0, Pronto: 0, Faturada: 0 },
     mes_referencia: ''
   })
 
@@ -62,11 +64,13 @@ function App() {
   const [ordem, setOrdem] = useState('asc') 
   const [modoExibicao, setModoExibicao] = useState('lista') 
   const [termoPesquisa, setTermoPesquisa] = useState("");
+  const [termoPesquisaProducao, setTermoPesquisaProducao] = useState("");
   const [termoPesquisaOrcamento, setTermoPesquisaOrcamento] = useState("");
   
   const [modalBipadorAberto, setModalBipadorAberto] = useState(false);
-  const [statusBipador, setStatusBipador] = useState('Produção');
+  const [statusBipador, setStatusBipador] = useState('Pronto');
   const [ofBipador, setOfBipador] = useState("");
+  const [qtdProduzidaBipador, setQtdProduzidaBipador] = useState("");
   const [msgBipador, setMsgBipador] = useState({ texto: "", tipo: "" });
   
   const inputBipadorRef = useRef(null);
@@ -110,8 +114,8 @@ function App() {
   };
 
   const formatarKg = (valor) => {
-    if (!valor || isNaN(valor)) return '0'
-    return Math.round(valor).toLocaleString('pt-BR')
+    if (valor === null || valor === undefined || isNaN(valor)) return '0,00'
+    return Number(valor).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
   }
 
   const carregarPedidos = useCallback((silencioso = false) => {
@@ -171,9 +175,9 @@ function App() {
         if (resDash.data) {
           setDadosDashboard(prev => ({
             ...prev, 
-            faturamento_mes: resDash.data.faturamento_mes, 
-            peso_mes_kg: resDash.data.peso_mes_kg,
-            total_nfs_mes: resDash.data.total_nfs_mes, 
+            ruycepel: resDash.data.ruycepel || prev.ruycepel,
+            elly: resDash.data.elly || prev.elly,
+            total: resDash.data.total || prev.total,
             mes_referencia: resDash.data.mes_referencia
           }))
         }
@@ -189,12 +193,15 @@ function App() {
     const distrib = { Pendente: 0, Compras: 0, Produção: 0, Parcial: 0, Pronto: 0, Faturada: 0 };
     
     pedidos.forEach(p => {
-      if (p.status === 'Pronto') { 
-        fatPronto += (p.faturamento_total || 0); 
-        pesoPronto += (p.peso_total_kg || 0); 
-      }
       p.itens.forEach(item => { 
         if (distrib[item.statusOF] !== undefined) distrib[item.statusOF]++; 
+
+        if (item.statusOF === 'Pronto') {
+          const qtdCaixas = item.qtd_produzida !== null && item.qtd_produzida !== undefined && item.qtd_produzida !== "" ? parseFloat(item.qtd_produzida) : item.qtd_restante;
+          const pesoUnit = item.qtd_prog > 0 ? (item.peso_of / item.qtd_prog) : 0;
+          fatPronto += (qtdCaixas * (item.preco_unitario || 0));
+          pesoPronto += (qtdCaixas * pesoUnit);
+        }
       });
     });
 
@@ -236,6 +243,24 @@ function App() {
   useEffect(() => { 
     if (modalBipadorAberto && inputBipadorRef.current) inputBipadorRef.current.focus(); 
   }, [modalBipadorAberto]);
+
+  const recalcularTotaisPedido = (pedidoParam) => {
+    let novoPesoTotal = 0;
+    let novoFatTotal = 0;
+    let itensAbertos = 0;
+
+    pedidoParam.itens.forEach(i => {
+      if (i.statusOF !== 'Faturada') {
+        const qtd = i.qtd_produzida !== null && i.qtd_produzida !== undefined && i.qtd_produzida !== "" ? parseFloat(i.qtd_produzida) : i.qtd_restante;
+        const pesoUnit = i.qtd_prog > 0 ? (i.peso_of / i.qtd_prog) : 0;
+        novoPesoTotal += qtd * pesoUnit;
+        novoFatTotal += qtd * (i.preco_unitario || 0);
+        itensAbertos++;
+      }
+    });
+
+    return { ...pedidoParam, peso_total_kg: novoPesoTotal, faturamento_total: novoFatTotal, total_itens_abertos: itensAbertos };
+  };
 
   const calcularDistancia = (coord1, coord2) => {
     if (!coord1 || !coord2) return 0;
@@ -349,22 +374,23 @@ function App() {
     setOrcamentosExpandidos(prev => prev.includes(idOrcamento) ? prev.filter(id => id !== idOrcamento) : [...prev, idOrcamento]) 
   }
 
-  const alternarStatusOf = (idPedido, idOf, novoStatus) => {
+  const alternarStatusOf = (idPedido, idOf, novoStatus, qtdProduzida = null) => {
     iniciarAtualizacao();
     
     setPedidos(prevPedidos => {
       return prevPedidos.map(p => {
         if (p.id === idPedido) {
-          const novosItens = p.itens.map(item => item.id_numof === idOf ? { ...item, statusOF: novoStatus, concluido: (novoStatus === "Pronto" || novoStatus === "Faturada") } : item);
+          const novosItens = p.itens.map(item => item.id_numof === idOf ? { ...item, statusOF: novoStatus, qtd_produzida: qtdProduzida || item.qtd_produzida, concluido: (novoStatus === "Pronto" || novoStatus === "Faturada") } : item);
           const abertos = novosItens.filter(i => i.statusOF !== "Faturada");
           const todasConcluidas = abertos.length > 0 && abertos.every(i => i.statusOF === "Pronto");
-          return { ...p, itens: novosItens, status: todasConcluidas ? 'Pronto' : 'Pendente' }
+          const pedidoParcialmenteAtualizado = { ...p, itens: novosItens, status: todasConcluidas ? 'Pronto' : 'Pendente' };
+          return recalcularTotaisPedido(pedidoParcialmenteAtualizado);
         }
         return p
       })
     })
     
-    axios.put(`${API_URL}/api/pedidos/${idPedido}/itens/${idOf}/status`, { status: novoStatus })
+    axios.put(`${API_URL}/api/pedidos/${idPedido}/itens/${idOf}/status`, { status: novoStatus, qtd_produzida: qtdProduzida })
       .then(() => { 
         finalizarAtualizacao(); 
         carregarResumos() 
@@ -376,44 +402,58 @@ function App() {
   }
 
   const handleBiparOF = async (e) => {
-    if (e.key !== 'Enter') return;
-    if (!ofBipador.trim()) return;
-    
-    iniciarAtualizacao();
-    const numeroOF = ofBipador.trim();
-    setOfBipador(""); 
-    
-    setPedidos(prevPedidos => {
-      return prevPedidos.map(p => {
-        let encontrouOF = false;
-        const novosItens = p.itens.map(item => {
-          if(String(item.id_numof) === numeroOF) { 
-            encontrouOF = true; 
-            return { ...item, statusOF: statusBipador, concluido: (statusBipador === "Pronto" || statusBipador === "Faturada") } 
-          }
-          return item;
-        });
-        
-        if (encontrouOF) {
-          const abertos = novosItens.filter(i => i.statusOF !== "Faturada");
-          const todasConcluidas = abertos.length > 0 && abertos.every(i => i.statusOF === "Pronto");
-          return { ...p, itens: novosItens, status: todasConcluidas ? 'Pronto' : 'Pendente' }
-        }
-        return p;
-      })
-    });
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      
+      if (!ofBipador.trim()) {
+        if (inputBipadorRef.current) inputBipadorRef.current.focus();
+        return;
+      }
+      
+      iniciarAtualizacao();
+      const numeroOF = ofBipador.trim();
+      const qtdNum = qtdProduzidaBipador.trim() ? parseFloat(qtdProduzidaBipador.trim()) : null;
+      setOfBipador(""); 
+      setQtdProduzidaBipador("");
 
-    try {
-      await axios.put(`${API_URL}/api/ofs/status-rapido`, { id_of: numeroOF, status: statusBipador });
-      finalizarAtualizacao(); 
-      setMsgBipador({ texto: `OF ${numeroOF} salva!`, tipo: 'success' }); 
-      carregarResumos();
-    } catch (error) {
-      finalizarAtualizacao(); 
-      setMsgBipador({ texto: `Erro na OF ${numeroOF}`, tipo: 'error' }); 
-      carregarPedidos(true); 
+      setPedidos(prevPedidos => {
+        return prevPedidos.map(p => {
+          let encontrouOF = false;
+          const novosItens = p.itens.map(item => {
+            if(String(item.id_numof) === numeroOF) { 
+              encontrouOF = true; 
+              return { ...item, statusOF: statusBipador, qtd_produzida: qtdNum || item.qtd_produzida, concluido: (statusBipador === "Pronto" || statusBipador === "Faturada") } 
+            }
+            return item;
+          });
+          
+          if (encontrouOF) {
+            const abertos = novosItens.filter(i => i.statusOF !== "Faturada");
+            const todasConcluidas = abertos.length > 0 && abertos.every(i => i.statusOF === "Pronto");
+            const pedidoParcialmenteAtualizado = { ...p, itens: novosItens, status: todasConcluidas ? 'Pronto' : 'Pendente' };
+            return recalcularTotaisPedido(pedidoParcialmenteAtualizado);
+          }
+          return p;
+        })
+      });
+
+      try {
+        await axios.put(`${API_URL}/api/ofs/status-rapido`, { id_of: numeroOF, status: statusBipador, qtd_produzida: qtdNum });
+        finalizarAtualizacao(); 
+        setMsgBipador({ texto: `OF ${numeroOF} salva!`, tipo: 'success' }); 
+        carregarResumos();
+      } catch (error) {
+        finalizarAtualizacao(); 
+        setMsgBipador({ texto: `Erro na OF ${numeroOF}`, tipo: 'error' }); 
+        carregarPedidos(true); 
+      }
+      
+      if (inputBipadorRef.current) {
+        inputBipadorRef.current.focus();
+      }
+      
+      setTimeout(() => setMsgBipador({texto: "", tipo: ""}), 3000); 
     }
-    setTimeout(() => setMsgBipador({texto: "", tipo: ""}), 3000); 
   }
 
   const alterarStatusPedido = (id, novoStatus) => {
@@ -478,9 +518,14 @@ function App() {
       if (!p) return false;
       const termo = termoPesquisa.toLowerCase();
       if (!termo) return true;
-      return String(p.id_pedido || '').toLowerCase().includes(termo) || 
-             String(p.cliente || '').toLowerCase().includes(termo) || 
-             String(p.pedido_cliente || '').toLowerCase().includes(termo);
+      
+      const matchPedido = String(p.id_pedido || '').toLowerCase().includes(termo) || 
+                          String(p.cliente || '').toLowerCase().includes(termo) || 
+                          String(p.pedido_cliente || '').toLowerCase().includes(termo);
+                          
+      const matchOF = p.itens && p.itens.some(item => String(item.id_numof || '').toLowerCase().includes(termo));
+      
+      return matchPedido || matchOF;
     });
   }, [pedidos, termoPesquisa]);
 
@@ -506,10 +551,8 @@ function App() {
 
   const pedidosAbaControlePaginados = useMemo(() => pedidosAbaControle.slice(0, limiteExibicao), [pedidosAbaControle, limiteExibicao]);
   
-  // Mapa só usa pedidos prontos "Em Aberto" com itens ativos
   const pedidosProntosParaMapa = useMemo(() => pedidos.filter(p => p.status === 'Pronto' && p.total_itens_abertos > 0), [pedidos]);
 
-  // Orcamentos Filtrados
   const orcamentosFiltrados = useMemo(() => {
     return orcamentos.filter(o => {
        if (!o) return false;
@@ -678,6 +721,10 @@ function App() {
     );
   }
 
+  const dadosDashboardAtivo = useMemo(() => {
+    return dadosDashboard[empresaFiltro] || dadosDashboard.total;
+  }, [dadosDashboard, empresaFiltro]);
+
   return (
     <div className={`min-h-screen ${t.bg} p-2 md:p-4 lg:p-8 font-sans w-full transition-colors duration-300`}>
       
@@ -709,7 +756,7 @@ function App() {
         </div>
       </header>
 
-      {/* MODAL BIPADOR */}
+      {/* MODAL BIPADOR OTIMIZADO */}
       {modalBipadorAberto && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
           <div className={`${t.card} border ${t.border} rounded-2xl shadow-2xl p-6 w-full max-w-lg transform scale-100 transition-all`}>
@@ -720,7 +767,7 @@ function App() {
               </button>
             </div>
             
-            <div className="space-y-5">
+            <div className="space-y-6">
               <div>
                 <label className={`block text-xs font-bold ${t.textSecondary} uppercase tracking-wider mb-2`}>1. Escolha o Status</label>
                 <div className="grid grid-cols-2 md:grid-cols-5 gap-2">
@@ -731,11 +778,35 @@ function App() {
                   <button onClick={() => { setStatusBipador('Faturada'); inputBipadorRef.current.focus(); }} className={`py-3 sm:py-2 rounded-lg text-[11px] font-bold border transition-all ${statusBipador === 'Faturada' ? 'bg-gray-500/20 text-gray-400 border-gray-500/50' : `${t.inner} ${t.textSecondary} ${t.border}`}`}>FATURADA</button>
                 </div>
               </div>
-              
+
               <div>
-                <label className={`block text-xs font-bold ${t.textSecondary} uppercase tracking-wider mb-2`}>2. Digite ou Bipe a OF e tecle Enter</label>
-                <input ref={inputBipadorRef} type="text" value={ofBipador} onChange={(e) => setOfBipador(e.target.value)} onKeyDown={handleBiparOF} placeholder="Nº da OF..." className={`w-full ${t.inner} ${t.textPrimary} border ${t.border} rounded-xl px-4 py-4 sm:py-3 text-lg font-mono font-bold focus:outline-none focus:border-[#5DD62C] transition-all`} />
-                <p className={`text-[10px] mt-1.5 ${t.textSecondary}`}>O status será salvo instantaneamente em toda a rede.</p>
+                <label className={`block text-xs font-bold ${t.textSecondary} uppercase tracking-wider mb-2`}>2. Digite ou Bipe os Dados (Use TAB e ENTER)</label>
+                <div className="flex gap-3">
+                  <div className="flex-1 relative">
+                    <input 
+                      ref={inputBipadorRef} 
+                      type="text" 
+                      value={ofBipador} 
+                      onChange={(e) => setOfBipador(e.target.value)} 
+                      onKeyDown={handleBiparOF} 
+                      placeholder="Nº da OF" 
+                      className={`w-full ${t.inner} ${t.textPrimary} border ${t.border} rounded-xl px-4 py-3 text-sm md:text-base font-mono font-bold focus:outline-none focus:border-[#5DD62C] transition-all`} 
+                    />
+                    <span className="absolute top-[-8px] left-3 bg-[#202020] px-1 text-[9px] text-[#5DD62C] font-bold uppercase">OF *</span>
+                  </div>
+                  <div className="flex-1 relative">
+                    <input 
+                      type="number" 
+                      value={qtdProduzidaBipador} 
+                      onChange={(e) => setQtdProduzidaBipador(e.target.value)} 
+                      onKeyDown={handleBiparOF} 
+                      placeholder="Qtd (Opcional)" 
+                      className={`w-full ${t.inner} ${t.textPrimary} border ${t.border} rounded-xl px-4 py-3 text-sm md:text-base font-mono focus:outline-none focus:border-[#5DD62C] transition-all`} 
+                    />
+                    <span className="absolute top-[-8px] left-3 bg-[#202020] px-1 text-[9px] text-gray-500 font-bold uppercase">Quantidade</span>
+                  </div>
+                </div>
+                <p className={`text-[10px] mt-2 ${t.textSecondary} flex items-center gap-1`}><svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg> Se a quantidade ficar em branco, a Qtd Programada será usada.</p>
               </div>
               
               {msgBipador.texto && (
@@ -781,10 +852,26 @@ function App() {
 
               <div className={`${t.card} rounded-2xl shadow-md overflow-hidden w-full border ${t.border}`}>
                 <div className={`p-4 md:p-5 border-b ${t.border} flex flex-col md:flex-row justify-between items-start md:items-center gap-3 ${t.card}`}>
-                  <h2 className={`text-lg font-bold ${t.textPrimary}`}>Pedidos Prontos para Expedição</h2>
-                  <span className={`${t.bgAccentSoft} ${t.textAccent} text-xs px-3 py-1.5 rounded-full font-bold border ${t.borderAccentSoft}`}>
-                    {pedidosProntosParaMapa.length} Prontos
-                  </span>
+                  <div className="flex items-center gap-3">
+                     <h2 className={`text-lg font-bold ${t.textPrimary}`}>Pedidos Prontos para Expedição</h2>
+                     <span className={`${t.bgAccentSoft} ${t.textAccent} text-xs px-3 py-1.5 rounded-full font-bold border ${t.borderAccentSoft}`}>
+                       {pedidosProntosParaMapa.length} Prontos
+                     </span>
+                  </div>
+                  {pedidosSelecionados.length > 0 && (
+                    <button 
+                      onClick={() => {
+                        iniciarAtualizacao();
+                        axios.put(`${API_URL}/api/pedidos/status-lote`, { ids: pedidosSelecionados, status: 'Faturada' })
+                          .then(() => { finalizarAtualizacao(); setPedidosSelecionados([]); carregarPedidos(true); carregarResumos(); })
+                          .catch(() => { finalizarAtualizacao(); })
+                      }} 
+                      className="bg-[#5DD62C] hover:bg-[#337418] text-[#0F0F0F] hover:text-[#F8F8F8] text-[11px] px-3 py-1.5 rounded font-bold shadow transition-all flex items-center gap-1"
+                    >
+                      <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7" /></svg>
+                      Forçar Baixa ({pedidosSelecionados.length})
+                    </button>
+                  )}
                 </div>
                 
                 <div className="overflow-x-auto w-full scrollbar-hide">
@@ -794,7 +881,7 @@ function App() {
                         <th className="p-4 w-16 text-center">Rota</th>
                         <th className="p-4">Pedido / Cliente</th>
                         <th className="p-4 text-center">Itens Prontos</th>
-                        <th className="p-4 text-center">Peso</th>
+                        <th className="p-4 text-center">Peso Real</th>
                         <th className="p-4 text-center">Valor (R$)</th>
                         <th className="p-4 text-center">Status</th>
                       </tr>
@@ -896,19 +983,36 @@ function App() {
             p.itens.filter(i => i.statusOF === 'Produção').map(i => ({ ...i, pedido: p }))
           ).sort((a, b) => new Date(b.data_producao || 0) - new Date(a.data_producao || 0));
 
+          const ofsEmProducaoFiltradas = ofsEmProducao.filter(of => {
+             const termo = termoPesquisaProducao.toLowerCase();
+             if (!termo) return true;
+             return String(of.id_numof || '').toLowerCase().includes(termo) ||
+                    String(of.pedido.id_pedido || '').toLowerCase().includes(termo) ||
+                    String(of.pedido.cliente || '').toLowerCase().includes(termo) ||
+                    String(of.referencia || '').toLowerCase().includes(termo);
+          });
+
           return (
             <div className="space-y-6 w-full relative z-0">
                <div className={`flex flex-col md:flex-row justify-between items-start md:items-center mb-6 gap-4 border-b ${t.border} pb-5`}>
                   <div>
                     <h2 className={`text-2xl font-bold ${t.textPrimary}`}>Painel de Controle de Produção</h2>
                   </div>
-                  <div className={`${t.bgAccentSoft} ${t.textAccent} font-mono px-5 py-2.5 rounded-xl text-lg font-bold border ${t.borderAccentSoft}`}>
-                    {ofsEmProducao.length} OFs em Produção
+                  <div className="flex flex-col sm:flex-row items-center gap-3 w-full md:w-auto">
+                    <div className="relative w-full sm:w-64 flex-shrink-0">
+                      <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                        <svg className={`w-4 h-4 ${t.textSecondary}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" /></svg>
+                      </div>
+                      <input type="text" value={termoPesquisaProducao} onChange={(e) => setTermoPesquisaProducao(e.target.value)} placeholder="Buscar OF, Pedido ou Cliente..." className={`w-full pl-9 pr-3 py-3 md:py-2 bg-transparent border ${t.border} rounded-lg text-xs md:text-sm ${t.textPrimary} focus:outline-none focus:border-purple-500`} />
+                    </div>
+                    <div className={`${t.bgAccentSoft} ${t.textAccent} font-mono px-5 py-2.5 rounded-xl text-lg font-bold border ${t.borderAccentSoft} whitespace-nowrap`}>
+                      {ofsEmProducaoFiltradas.length} OFs em Produção
+                    </div>
                   </div>
                </div>
                
                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
-                  {ofsEmProducao.map((of, idx) => {
+                  {ofsEmProducaoFiltradas.map((of, idx) => {
                      const { texto: textoDias, dias } = calcularTempoProducao(of.data_producao);
                      const corTag = dias >= 5 ? 'text-red-400 bg-red-500/10 border-red-500/20' : 
                                     dias >= 3 ? 'text-amber-400 bg-amber-500/10 border-amber-500/20' : 
@@ -939,8 +1043,8 @@ function App() {
 
                            <div className={`grid grid-cols-2 gap-y-4 gap-x-2 py-4 border-y ${t.border} mb-4`}>
                               <div>
-                                 <span className={`block text-[10px] ${t.textSecondary} uppercase tracking-wider mb-1`}>Qtd Faltante / Peso</span>
-                                 <span className={`font-mono font-bold ${t.textPrimary} text-sm`}>{Math.round(of.qtd_restante)} <span className="text-[10px] font-sans font-normal">cx</span></span>
+                                 <span className={`block text-[10px] ${t.textSecondary} uppercase tracking-wider mb-1`}>Qtd OF / Peso</span>
+                                 <span className={`font-mono font-bold ${t.textPrimary} text-sm`}>{Number(of.qtd_prog).toLocaleString('pt-BR')} <span className="text-[10px] font-sans font-normal">cx</span></span>
                                  <div className={`font-mono font-bold ${t.textAccent} text-xs`}>{formatarKg(of.peso_restante)} kg</div>
                               </div>
                               <div>
@@ -985,10 +1089,10 @@ function App() {
                      )
                   })}
                   
-                  {ofsEmProducao.length === 0 && !carregando && (
+                  {ofsEmProducaoFiltradas.length === 0 && !carregando && (
                     <div className={`col-span-full p-16 text-center ${t.textSecondary} ${t.inner} rounded-2xl border ${t.border}`}>
                        <svg className="w-12 h-12 mx-auto mb-4 opacity-50" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
-                       <p className="text-lg">Nenhuma Ordem de Fabricação em produção no momento.</p>
+                       <p className="text-lg">Nenhuma Ordem de Fabricação encontrada na produção no momento.</p>
                     </div>
                   )}
                </div>
@@ -1203,7 +1307,7 @@ function App() {
               <div className={`flex flex-col xl:flex-row items-center gap-3 w-full mb-6`}>
                  <div className="relative w-full xl:w-64 flex-shrink-0">
                    <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none"><svg className={`w-4 h-4 ${t.textSecondary}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" /></svg></div>
-                   <input type="text" value={termoPesquisa} onChange={(e) => setTermoPesquisa(e.target.value)} placeholder="Buscar pedido" className={`w-full pl-9 pr-3 py-3 md:py-2 bg-transparent border ${t.border} rounded-lg text-xs md:text-sm ${t.textPrimary} focus:outline-none focus:border-[#5DD62C]`} />
+                   <input type="text" value={termoPesquisa} onChange={(e) => setTermoPesquisa(e.target.value)} placeholder="Buscar pedido ou OF" className={`w-full pl-9 pr-3 py-3 md:py-2 bg-transparent border ${t.border} rounded-lg text-xs md:text-sm ${t.textPrimary} focus:outline-none focus:border-[#5DD62C]`} />
                  </div>
                  
                  <div className="flex flex-col sm:flex-row w-full xl:w-auto justify-between items-stretch sm:items-center gap-3 ml-auto">
@@ -1244,6 +1348,12 @@ function App() {
                                   <span className={`text-xs ${t.card} ${t.textSecondary} px-2.5 py-0.5 rounded-md font-mono font-bold border ${t.border}`}>PEDIDO {pedido.id_pedido}</span>
                                   {!isFaturadoGeral && <span className={`text-[11px] px-2 py-0.5 rounded-md font-mono font-bold border ${todasConcluidas ? `${t.bgAccentSoft} ${t.textAccent} ${t.borderAccentSoft}` : `${t.card} ${t.textSecondary} ${t.border}`}`}>OFs Prontas: {concluidas}/{total}</span>}
                                   {isFaturadoGeral && <span className={`text-[11px] px-2 py-0.5 rounded-md font-bold uppercase border bg-gray-500/10 text-gray-400 border-gray-500/20`}>Faturado</span>}
+                                  {pedido.has_entrega_parcial && !isFaturadoGeral && (
+                                    <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 text-[10px] font-bold rounded-full bg-amber-500/10 text-amber-400 border border-amber-500/20">
+                                      <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse"></span>
+                                      ⚠️ Entrega Parcial
+                                    </span>
+                                  )}
                                 </div>
                                 <h3 className={`font-bold ${t.textPrimary} text-base leading-tight`}>{pedido.cliente}</h3>
                                 {pedido.pedido_cliente && <p className={`text-xs ${t.textAccent} font-mono font-bold mt-1`}>Pedido Cliente: {pedido.pedido_cliente}</p>}
@@ -1266,24 +1376,33 @@ function App() {
                                 <span className={`block text-[10px] ${t.textSecondary} uppercase tracking-wider mb-0.5`}>Emissão</span>
                                 <span className={`font-mono ${t.textPrimary}`}>{pedido.data_emissao || '-'}</span>
                               </div>
-                              <div className="w-[45%] md:w-auto">
+                              <div className="w-[45%] md:w-auto flex flex-col gap-2 items-end">
                                 {isFaturadoGeral ? <span className={`text-[11px] font-bold ${t.textSecondary}`}>ENTREGUE</span> : renderizarTagPrazo(pedido.dias_restantes, pedido.data_entrega)}
+                                {!isFaturadoGeral && (
+                                  <button onClick={(e) => { e.stopPropagation(); alterarStatusPedido(pedido.id, 'Faturada'); }} className={`text-[9px] uppercase tracking-wider font-bold bg-[#5DD62C] hover:bg-[#337418] text-[#0F0F0F] hover:text-[#F8F8F8] px-2 py-1 rounded shadow-sm transition-all`}>
+                                    Forçar Baixa
+                                  </button>
+                                )}
                               </div>
                             </div>
                           </div>
 
                           {estaExpandido && (
-                            <div className={`${t.innerAlt} p-4 md:p-5 border-t ${t.border}`}>
-                              <h4 className={`text-[11px] font-bold ${t.textSecondary} uppercase tracking-wider mb-4`}>Itens do Pedido</h4>
+                            <div className={`${t.innerAlt} p-4 md:p-5 border-t ${t.border} overflow-x-auto`}>
+                              <h4 className={`text-[11px] font-bold ${t.textSecondary} uppercase tracking-wider mb-4`}>Itens do Pedido (Visão Detalhada)</h4>
                               {pedido.itens && pedido.itens.length > 0 ? (
-                                <div className="overflow-x-auto w-full scrollbar-hide">
-                                  <table className="w-full text-left border-collapse text-xs min-w-[600px]">
+                                <div className="w-full scrollbar-hide">
+                                  <table className="w-full text-left border-collapse text-xs min-w-[800px]">
                                     <thead>
                                       <tr className={`border-b ${t.border} ${t.textSecondary} uppercase font-mono`}>
                                         <th className="py-2.5 px-3">OF</th>
+                                        <th className="py-2.5 px-3">FT</th>
                                         <th className="py-2.5 px-3">Referência</th>
+                                        <th className="py-2.5 px-3 text-center">Data Prog.</th>
                                         <th className="py-2.5 px-3 text-center">Qtde (Restante)</th>
-                                        <th className="py-2.5 px-3 text-right">Peso (Restante)</th>
+                                        <th className="py-2.5 px-3 text-right">Peso (Total)</th>
+                                        <th className="py-2.5 px-3 text-right">Val. Unit.</th>
+                                        <th className="py-2.5 px-3 text-right">Val. Total</th>
                                         <th className="py-2.5 px-3 text-center">Status OF</th>
                                       </tr>
                                     </thead>
@@ -1291,13 +1410,20 @@ function App() {
                                       {pedido.itens.map((item, idx) => {
                                         const numeroOf = item.id_numof || '-';
                                         const isFaturada = item.statusOF === 'Faturada';
+                                        const qtdExibir = item.qtd_produzida !== null && item.qtd_produzida !== undefined && item.qtd_produzida !== "" ? parseFloat(item.qtd_produzida) : item.qtd_restante;
+                                        const pesoUnit = item.qtd_prog > 0 ? (item.peso_of / item.qtd_prog) : 0;
+                                        const pesoExibir = qtdExibir * pesoUnit;
                                         
                                         return (
                                           <tr key={idx} className={`${t.hoverCard} transition-colors ${isFaturada ? 'opacity-40 grayscale' : ''}`}>
                                             <td className={`py-3 px-3 font-mono font-bold ${t.textAccent}`}>{numeroOf.toString().startsWith("ITEM") ? numeroOf : `OF ${numeroOf}`}</td>
-                                            <td className={`py-3 px-3 font-medium ${t.textPrimary}`}>{item.referencia || item.id_produto || '-'}</td>
-                                            <td className={`py-3 px-3 text-center font-mono ${t.textPrimary}`}>{Math.round(item.qtd_restante)}</td>
-                                            <td className={`py-3 px-3 text-right font-mono ${t.textAccent}`}>{formatarKg(item.peso_restante)} kg</td>
+                                            <td className={`py-3 px-3 font-mono ${t.textSecondary}`}>{item.id_produto || '-'}</td>
+                                            <td className={`py-3 px-3 font-medium ${t.textPrimary}`}>{item.referencia || '-'}</td>
+                                            <td className="py-3 px-3 text-center font-mono">{item.data_programada || '-'}</td>
+                                            <td className={`py-3 px-3 text-center font-mono ${t.textPrimary}`}>{Number(qtdExibir).toLocaleString('pt-BR')} / {Number(item.qtd_prog).toLocaleString('pt-BR')}</td>
+                                            <td className={`py-3 px-3 text-right font-mono ${t.textAccent}`}>{formatarKg(pesoExibir)} kg</td>
+                                            <td className={`py-3 px-3 text-right font-mono ${t.textSecondary}`}>R$ {(item.preco_unitario || 0).toLocaleString('pt-BR', {minimumFractionDigits:2, maximumFractionDigits:2})}</td>
+                                            <td className={`py-3 px-3 text-right font-mono font-bold ${t.textPrimary}`}>R$ {((qtdExibir || 0) * (item.preco_unitario || 0)).toLocaleString('pt-BR', {minimumFractionDigits:2, maximumFractionDigits:2})}</td>
                                             <td className="py-3 px-3 text-center">
                                               <select value={item.statusOF || 'Pendente'} onChange={(e) => alternarStatusOf(pedido.id, item.id_numof, e.target.value)} className={`text-[10px] font-bold rounded-full px-2.5 py-1.5 border cursor-pointer focus:outline-none ${obterEstiloStatusCompleto(item.statusOF)}`}>
                                                 <option value="Pendente" className={`${t.card} text-amber-500`}>O Pendente</option>
@@ -1327,11 +1453,24 @@ function App() {
                                   <span className={`text-[11px] ${t.card} ${t.textSecondary} px-2.5 py-0.5 rounded-md font-mono font-bold border ${t.border}`}>PEDIDO {pedido.id_pedido}</span>
                                   {!isFaturadoGeral && <span className={`text-[10px] px-2 py-0.5 rounded-md font-mono font-bold border ${todasConcluidas ? `${t.bgAccentSoft} ${t.textAccent} ${t.borderAccentSoft}` : `${t.card} ${t.textSecondary} ${t.border}`}`}>OFs Ativas: {concluidas}/{total}</span>}
                                   {isFaturadoGeral && <span className={`text-[10px] px-2 py-0.5 rounded-md font-bold uppercase border bg-gray-500/10 text-gray-400 border-gray-500/20`}>Faturado</span>}
+                                  {pedido.has_entrega_parcial && !isFaturadoGeral && (
+                                    <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 text-[10px] font-bold rounded-full bg-amber-500/10 text-amber-400 border border-amber-500/20">
+                                      <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse"></span>
+                                      ⚠️ Entrega Parcial
+                                    </span>
+                                  )}
                                 </div>
                                 <h3 className={`font-bold ${t.textPrimary} text-base leading-tight`}>{pedido.cliente}</h3>
                                 {pedido.pedido_cliente && <p className={`text-xs ${t.textAccent} font-mono font-bold mt-1`}>Pedido Cliente {pedido.pedido_cliente}</p>}
                               </div>
-                              <div className="flex-shrink-0">{isFaturadoGeral ? <span className={`text-[11px] font-bold ${t.textSecondary}`}>ENTREGUE</span> : renderizarTagPrazo(pedido.dias_restantes, pedido.data_entrega)}</div>
+                              <div className="flex-shrink-0 flex flex-col items-end gap-2">
+                                {isFaturadoGeral ? <span className={`text-[11px] font-bold ${t.textSecondary}`}>ENTREGUE</span> : renderizarTagPrazo(pedido.dias_restantes, pedido.data_entrega)}
+                                {!isFaturadoGeral && (
+                                  <button onClick={(e) => { e.stopPropagation(); alterarStatusPedido(pedido.id, 'Faturada'); }} className={`text-[9px] uppercase tracking-wider font-bold bg-[#5DD62C] hover:bg-[#337418] text-[#0F0F0F] hover:text-[#F8F8F8] px-2 py-1 rounded shadow-sm transition-all`}>
+                                    Forçar Baixa
+                                  </button>
+                                )}
+                              </div>
                             </div>
                             <div className={`my-4 py-3 border-y ${t.border} grid ${isFaturadoGeral ? 'grid-cols-2' : 'grid-cols-3'} gap-2 text-center text-xs`}>
                               {!isFaturadoGeral && <div><span className={`block text-[10px] ${t.textSecondary} uppercase tracking-wider mb-1`}>Itens Ativos</span><span className={`font-mono font-bold ${t.textPrimary}`}>{pedido.total_itens_abertos || 0}</span></div>}
@@ -1351,15 +1490,20 @@ function App() {
                                 {pedido.itens && pedido.itens.length > 0 ? (
                                   pedido.itens.map((item, idx) => {
                                     const numeroOf = item.id_numof || '-';
+                                    const qtdExibir = item.qtd_produzida !== null && item.qtd_produzida !== undefined && item.qtd_produzida !== "" ? parseFloat(item.qtd_produzida) : item.qtd_restante;
+                                    const pesoUnit = item.qtd_prog > 0 ? (item.peso_of / item.qtd_prog) : 0;
+                                    const pesoExibir = qtdExibir * pesoUnit;
+
                                     return (
                                       <div key={idx} className={`p-3 ${t.inner} border ${t.border} rounded-lg flex flex-col gap-2 ${item.statusOF === 'Faturada' ? 'opacity-40 grayscale' : ''}`}>
                                         <div className="flex justify-between items-center font-mono">
                                           <span className={`font-bold ${t.textAccent}`}>{numeroOf.toString().startsWith("ITEM") ? numeroOf : `OF ${numeroOf}`}</span>
+                                          <span className={`text-[10px] ${t.textSecondary}`}>{item.data_programada}</span>
                                         </div>
                                         <div className={`font-bold ${t.textPrimary} truncate`}>{item.referencia || item.id_produto}</div>
                                         <div className={`flex justify-between items-center text-[11px] ${t.textSecondary}`}>
-                                          <span>Qtd Restante: <span className={t.textPrimary}>{Math.round(item.qtd_restante)}</span></span>
-                                          <span className={`${t.textAccent} font-mono font-bold`}>{formatarKg(item.peso_restante)} kg</span>
+                                          <span>Qtd Restante: <span className={t.textPrimary}>{Number(qtdExibir).toLocaleString('pt-BR')} / {Number(item.qtd_prog).toLocaleString('pt-BR')}</span></span>
+                                          <span className={`${t.textAccent} font-mono font-bold`}>{formatarKg(pesoExibir)} kg</span>
                                         </div>
                                         <select value={item.statusOF || 'Pendente'} onChange={(e) => alternarStatusOf(pedido.id, item.id_numof, e.target.value)} className={`w-full py-2 md:py-1.5 mt-1 rounded-md text-[11px] md:text-[10px] font-bold border transition-all cursor-pointer focus:outline-none ${obterEstiloStatusCompleto(item.statusOF)}`}>
                                           <option value="Pendente" className={`${t.card} text-amber-500`}>Pendente</option>
@@ -1462,7 +1606,14 @@ function App() {
         {abaAtiva === 'dashboard' && (
           <div className="space-y-8 w-full">
             <div className={`flex flex-col sm:flex-row justify-between items-start sm:items-center border-b ${t.border} pb-4 sm:pb-3 gap-3`}>
-              <h2 className={`text-xl font-bold ${t.textPrimary}`}>Indicadores Operacionais e Faturamento</h2>
+              <div className="flex flex-col sm:flex-row sm:items-center gap-3">
+                <h2 className={`text-xl font-bold ${t.textPrimary}`}>Indicadores Operacionais e Faturamento</h2>
+                <div className={`flex bg-[#151515] rounded-md border ${t.border} p-0.5`}>
+                  <button onClick={() => setEmpresaFiltro('ruycepel')} className={`px-2.5 py-1 text-[10px] font-bold rounded-sm transition-all ${empresaFiltro === 'ruycepel' ? 'bg-[#337418] text-white shadow-sm' : 'text-gray-500 hover:text-gray-300'}`}>Ruycepel</button>
+                  <button onClick={() => setEmpresaFiltro('elly')} className={`px-2.5 py-1 text-[10px] font-bold rounded-sm transition-all ${empresaFiltro === 'elly' ? 'bg-[#337418] text-white shadow-sm' : 'text-gray-500 hover:text-gray-300'}`}>Elly</button>
+                  <button onClick={() => setEmpresaFiltro('total')} className={`px-2.5 py-1 text-[10px] font-bold rounded-sm transition-all ${empresaFiltro === 'total' ? 'bg-[#337418] text-white shadow-sm' : 'text-gray-500 hover:text-gray-300'}`}>Total</button>
+                </div>
+              </div>
               <span className={`text-xs ${t.textAccent} ${t.bgAccentSoft} border ${t.borderAccentSoft} px-3 py-1.5 rounded-full font-mono w-full sm:w-auto text-center`}>
                 Mês de Referência: {dadosDashboard.mes_referencia}
               </span>
@@ -1471,20 +1622,34 @@ function App() {
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4 md:gap-5">
               <div className={`${t.card} p-5 md:p-6 rounded-2xl shadow-md flex flex-col justify-center relative overflow-hidden`}>
                 <div className={`absolute top-0 right-0 w-2 h-full bg-[#5DD62C]`}></div>
-                <p className={`text-[13px] font-medium ${t.textSecondary} mb-1.5`}>Faturamento (Mês ERP)</p>
-                <p className={`text-2xl md:text-3xl font-bold ${t.textPrimary}`}>R$ {(dadosDashboard.faturamento_mes || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</p>
+                <div className="flex justify-between items-center mb-1.5">
+                  <p className={`text-[13px] font-medium ${t.textSecondary}`}>Faturamento ({empresaFiltro === 'ruycepel' ? 'Ruycepel' : empresaFiltro === 'elly' ? 'Elly' : 'Total'})</p>
+                  <div className={`flex bg-[#151515] rounded-md border ${t.border} p-0.5 ml-2`}>
+                    <button 
+                      onClick={() => setMostrarIPI(false)} 
+                      className={`px-2 py-0.5 text-[10px] font-bold rounded-sm transition-all ${!mostrarIPI ? 'bg-[#337418] text-white shadow-sm' : 'text-gray-500 hover:text-gray-300'}`}
+                    >Sem IPI</button>
+                    <button 
+                      onClick={() => setMostrarIPI(true)} 
+                      className={`px-2 py-0.5 text-[10px] font-bold rounded-sm transition-all ${mostrarIPI ? 'bg-[#337418] text-white shadow-sm' : 'text-gray-500 hover:text-gray-300'}`}
+                    >Com IPI</button>
+                  </div>
+                </div>
+                <p className={`text-2xl md:text-3xl font-bold ${t.textPrimary}`}>
+                  R$ {(mostrarIPI ? dadosDashboardAtivo.com_ipi : dadosDashboardAtivo.sem_ipi || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                </p>
               </div>
               
               <div className={`${t.card} p-5 md:p-6 rounded-2xl shadow-md flex flex-col justify-center relative overflow-hidden`}>
                 <div className={`absolute top-0 right-0 w-2 h-full bg-sky-500`}></div>
-                <p className={`text-[13px] font-medium ${t.textSecondary} mb-1.5`}>Peso Expedido (Mês ERP)</p>
-                <p className={`text-2xl md:text-3xl font-bold ${t.textPrimary}`}>{formatarKg(dadosDashboard.peso_mes_kg)} <span className={`text-sm md:text-base font-medium ${t.textAccent} ml-1`}>kg</span></p>
+                <p className={`text-[13px] font-medium ${t.textSecondary} mb-1.5`}>Peso Expedido ({empresaFiltro === 'ruycepel' ? 'Ruycepel' : empresaFiltro === 'elly' ? 'Elly' : 'Total'})</p>
+                <p className={`text-2xl md:text-3xl font-bold ${t.textPrimary}`}>{formatarKg(dadosDashboardAtivo.peso_mes_kg)} <span className={`text-sm md:text-base font-medium ${t.textAccent} ml-1`}>kg</span></p>
               </div>
               
               <div className={`${t.card} p-5 md:p-6 rounded-2xl shadow-md flex flex-col justify-center relative overflow-hidden`}>
                 <div className={`absolute top-0 right-0 w-2 h-full bg-indigo-500`}></div>
                 <p className={`text-[13px] font-medium ${t.textSecondary} mb-1.5`}>NFs Emitidas</p>
-                <p className={`text-2xl md:text-3xl font-bold ${t.textPrimary}`}>{dadosDashboard.total_nfs_mes || 0}</p>
+                <p className={`text-2xl md:text-3xl font-bold ${t.textPrimary}`}>{dadosDashboardAtivo.total_nfs_mes || 0}</p>
               </div>
             </div>
 
@@ -1495,7 +1660,7 @@ function App() {
                   <div className="space-y-4">
                     <div className={`flex justify-between items-center ${t.inner} p-4 rounded-xl border ${t.border}`}>
                       <span className={`text-sm ${t.textSecondary}`}>Faturamento Ativo</span>
-                      <span className={`text-base md:text-lg font-bold ${t.textPrimary} font-mono`}>R$ {(dadosDashboard.faturamento_carteira || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</span>
+                      <span className={`text-base md:text-lg font-bold ${t.textPrimary} font-mono`}>R$ {(dadosDashboard.faturamento_carteira || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                     </div>
                     <div className={`flex justify-between items-center ${t.inner} p-4 rounded-xl border ${t.border}`}>
                       <span className={`text-sm ${t.textSecondary}`}>Volume em Carga</span>
