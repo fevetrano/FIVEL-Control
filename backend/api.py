@@ -5,7 +5,11 @@ import traceback
 import threading
 import time
 from datetime import date, datetime
+
+# pyrefly: ignore [missing-import]
 from dotenv import load_dotenv
+
+# pyrefly: ignore [missing-import]
 import fdb
 from flask import Flask, jsonify, request
 from flask_cors import CORS
@@ -70,6 +74,22 @@ def init_sqlite_db():
                 id_orcamento TEXT PRIMARY KEY,
                 anotacao TEXT NOT NULL,
                 data_atualizacao TEXT NOT NULL
+            )
+        """)
+
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS estoque_manual (
+                id_estoque INTEGER PRIMARY KEY AUTOINCREMENT,
+                id_ft_principal TEXT NOT NULL,
+                referencia TEXT,
+                peso_conjunto REAL,
+                preco_conjunto REAL,
+                id_qualidfab TEXT,
+                id_ondafab TEXT,
+                nome_cliente TEXT,
+                gramatura TEXT,
+                quantidade REAL,
+                data_criacao TEXT
             )
         """)
         conn.commit()
@@ -1057,6 +1077,127 @@ def obter_resumo_dashboard():
     finally:
         if conn:
             conn.close()
+
+
+@app.route("/api/ft/<path:id_ft>", methods=["GET"])
+def obter_ft(id_ft):
+    conn = None
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+
+        id_ft_int = int(id_ft) if id_ft.isdigit() else -1
+
+        query = """
+            SELECT 
+                f.ID_FT_PRINCIPAL, f.REFERENCIA, f.PESO_CONJUNTO, f.PRECO_CONJUNTO,
+                f.ID_QUALIDFAB, f.ID_ONDAFAB, f.GRAMATURA, c.NOME AS NOME_CLIENTE
+            FROM FT f
+            LEFT JOIN CLIENTES c ON f.ID_CLIENTE = c.ID_CLIENTE
+            WHERE f.ID_FT_PRINCIPAL = ? OR f.ID_PRODUTO = ?
+        """
+        cur.execute(query, (id_ft_int, id_ft))
+        row = cur.fetchone()
+
+        if row:
+            colunas = [desc[0].lower() for desc in cur.description]
+            dados = dict(zip(colunas, row))
+            import decimal
+            for k, v in dados.items():
+                if isinstance(v, bytes):
+                    dados[k] = limpar_texto(v)
+                elif isinstance(v, decimal.Decimal):
+                    dados[k] = float(v)
+            return jsonify(dados), 200
+        else:
+            return jsonify({"erro": "FT não encontrada"}), 404
+
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"erro": str(e)}), 500
+    finally:
+        if conn:
+            conn.close()
+
+
+@app.route("/api/estoque", methods=["GET", "POST"])
+def gerenciar_estoque():
+    if request.method == "POST":
+        try:
+            dados = request.get_json() or {}
+            agora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+            with db_lock:
+                conn = get_sqlite_conn()
+                cur = conn.cursor()
+                cur.execute(
+                    """
+                    INSERT INTO estoque_manual (
+                        id_ft_principal, referencia, peso_conjunto, preco_conjunto,
+                        id_qualidfab, id_ondafab, nome_cliente, gramatura, quantidade, data_criacao
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                    (
+                        str(dados.get("id_ft_principal", "")),
+                        dados.get("referencia", ""),
+                        float(dados.get("peso_conjunto", 0.0) or 0.0),
+                        float(dados.get("preco_conjunto", 0.0) or 0.0),
+                        dados.get("id_qualidfab", ""),
+                        dados.get("id_ondafab", ""),
+                        dados.get("nome_cliente", ""),
+                        dados.get("gramatura", ""),
+                        float(dados.get("quantidade", 0.0) or 0.0),
+                        agora,
+                    ),
+                )
+                conn.commit()
+                conn.close()
+            return jsonify({"sucesso": True}), 201
+        except Exception as e:
+            traceback.print_exc()
+            return jsonify({"erro": str(e)}), 500
+
+    # Caso seja GET, retorna o estoque
+    try:
+        with db_lock:
+            conn = get_sqlite_conn()
+            cur = conn.cursor()
+            cur.execute("SELECT * FROM estoque_manual ORDER BY id_estoque DESC")
+            colunas = [desc[0] for desc in cur.description]
+            registros = [dict(zip(colunas, row)) for row in cur.fetchall()]
+            conn.close()
+
+        estoque_formatado = []
+        for r in registros:
+            estoque_formatado.append(
+                {
+                    "id_estoque": r.get("id_estoque"),
+                    "id_produto": r.get("id_ft_principal"),
+                    "referencia": r.get("referencia"),
+                    "cliente": r.get("nome_cliente"),
+                    "quantidade": r.get("quantidade"),
+                    "onda": r.get("id_ondafab"),
+                    "qualidade": r.get("id_qualidfab"),
+                    "gramatura": r.get("gramatura"),
+                    "peso_total": (
+                        float(r.get("peso_conjunto") or 0.0)
+                        * float(r.get("quantidade") or 0.0)
+                    ),
+                    "valor_total": (
+                        float(r.get("preco_conjunto") or 0.0)
+                        * float(r.get("quantidade") or 0.0)
+                    ),
+                    "comp": "-",
+                    "larg": "-",
+                    "alt": "-",
+                    "is_manual": True,
+                }
+            )
+
+        return jsonify(estoque_formatado), 200
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"erro": str(e)}), 500
 
 
 if __name__ == "__main__":

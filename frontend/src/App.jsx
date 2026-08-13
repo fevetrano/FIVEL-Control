@@ -19,60 +19,66 @@ const API_URL = 'http://192.168.1.34:5000'
 
 function RedimensionarMapa() {
   const map = useMap();
-  useEffect(() => { 
-    setTimeout(() => map.invalidateSize(), 100); 
+  useEffect(() => {
+    setTimeout(() => map.invalidateSize(), 100);
   }, [map]);
   return null;
 }
 
 function App() {
-  const [isDarkMode, setIsDarkMode] = useState(true); 
+  const [isDarkMode, setIsDarkMode] = useState(true);
   const [pedidos, setPedidos] = useState([])
   const [orcamentos, setOrcamentos] = useState([])
   const [compras, setCompras] = useState([])
+  const [estoque, setEstoque] = useState([])
   const [carregando, setCarregando] = useState(true)
-  const [abaAtiva, setAbaAtiva] = useState('prazos') 
-  const [pedidosSelecionados, setPedidosSelecionados] = useState([]) 
-  const [rotaIdaGeometria, setRotaIdaGeometria] = useState([]) 
-  const [rotaVoltaGeometria, setRotaVoltaGeometria] = useState([]) 
-  const [ordemEntregas, setOrdemEntregas] = useState([]) 
+  const [abaAtiva, setAbaAtiva] = useState('prazos')
+  const [pedidosSelecionados, setPedidosSelecionados] = useState([])
+  const [rotaIdaGeometria, setRotaIdaGeometria] = useState([])
+  const [rotaVoltaGeometria, setRotaVoltaGeometria] = useState([])
+  const [ordemEntregas, setOrdemEntregas] = useState([])
   const [limiteExibicao, setLimiteExibicao] = useState(20)
-  
+
   const [modoPesoAberto, setModoPesoAberto] = useState('total');
   const [filtroStatusPedido, setFiltroStatusPedido] = useState('aberto');
-  const [mostrarIPI, setMostrarIPI] = useState(false); 
-  const [empresaFiltro, setEmpresaFiltro] = useState('total'); 
-  
-  const [resumoMapa, setResumoMapa] = useState({ 
-    faturamento_pronto: 0, 
-    peso_pronto_kg: 0, 
-    peso_entregue_mes_kg: 0 
+  const [mostrarIPI, setMostrarIPI] = useState(false);
+  const [empresaFiltro, setEmpresaFiltro] = useState('total');
+
+  const [modalEstoqueAberto, setModalEstoqueAberto] = useState(false);
+  const [ftForm, setFtForm] = useState({ id_ft_principal: '', referencia: '', peso_conjunto: '', preco_conjunto: '', id_qualidfab: '', id_ondafab: '', nome_cliente: '', gramatura: '', quantidade: '' });
+  const [buscandoFt, setBuscandoFt] = useState(false);
+
+  const [resumoMapa, setResumoMapa] = useState({
+    faturamento_pronto: 0,
+    peso_pronto_kg: 0,
+    peso_entregue_mes_kg: 0
   })
-  
+
   const [dadosDashboard, setDadosDashboard] = useState({
     ruycepel: { com_ipi: 0, sem_ipi: 0, peso_mes_kg: 0, total_nfs_mes: 0 },
     elly: { com_ipi: 0, sem_ipi: 0, peso_mes_kg: 0, total_nfs_mes: 0 },
     total: { com_ipi: 0, sem_ipi: 0, peso_mes_kg: 0, total_nfs_mes: 0 },
-    faturamento_carteira: 0, 
-    peso_carteira_kg: 0, 
+    faturamento_carteira: 0,
+    peso_carteira_kg: 0,
     total_pedidos_carteira: 0,
     distribuicao_kanban: { Pendente: 0, Compras: 0, Produção: 0, Parcial: 0, Pronto: 0, Faturada: 0 },
     mes_referencia: ''
   })
 
-  const [ordenarPor, setOrdenarPor] = useState('prazo') 
-  const [ordem, setOrdem] = useState('asc') 
-  const [modoExibicao, setModoExibicao] = useState('lista') 
+  const [ordenarPor, setOrdenarPor] = useState('prazo')
+  const [ordem, setOrdem] = useState('asc')
+  const [modoExibicao, setModoExibicao] = useState('lista')
   const [termoPesquisa, setTermoPesquisa] = useState("");
   const [termoPesquisaProducao, setTermoPesquisaProducao] = useState("");
   const [termoPesquisaOrcamento, setTermoPesquisaOrcamento] = useState("");
-  
+  const [termoPesquisaEstoque, setTermoPesquisaEstoque] = useState("");
+
   const [modalBipadorAberto, setModalBipadorAberto] = useState(false);
   const [statusBipador, setStatusBipador] = useState('Pronto');
   const [ofBipador, setOfBipador] = useState("");
   const [qtdProduzidaBipador, setQtdProduzidaBipador] = useState("");
   const [msgBipador, setMsgBipador] = useState({ texto: "", tipo: "" });
-  
+
   const inputBipadorRef = useRef(null);
   const [pedidosExpandidos, setPedidosExpandidos] = useState([])
   const [comprasExpandidas, setComprasExpandidas] = useState([])
@@ -87,7 +93,7 @@ function App() {
   const iniciarAtualizacao = () => {
     isUpdatingRef.current = true;
     if (fallbackTimerRef.current) clearTimeout(fallbackTimerRef.current);
-    fallbackTimerRef.current = setTimeout(() => { isUpdatingRef.current = false; }, 8000); 
+    fallbackTimerRef.current = setTimeout(() => { isUpdatingRef.current = false; }, 8000);
   };
 
   const finalizarAtualizacao = () => {
@@ -96,19 +102,19 @@ function App() {
   };
 
   const t = {
-    bg: isDarkMode ? 'bg-[#0F0F0F]' : 'bg-gray-100', 
+    bg: isDarkMode ? 'bg-[#0F0F0F]' : 'bg-gray-100',
     card: isDarkMode ? 'bg-[#202020]' : 'bg-white',
-    inner: isDarkMode ? 'bg-[#151515]' : 'bg-gray-50', 
+    inner: isDarkMode ? 'bg-[#151515]' : 'bg-gray-50',
     innerAlt: isDarkMode ? 'bg-[#1A1A1A]' : 'bg-gray-100',
-    border: isDarkMode ? 'border-[#333333]' : 'border-gray-200', 
+    border: isDarkMode ? 'border-[#333333]' : 'border-gray-200',
     textPrimary: isDarkMode ? 'text-[#F8F8F8]' : 'text-gray-900',
-    textSecondary: isDarkMode ? 'text-[#A0A0A0]' : 'text-gray-500', 
+    textSecondary: isDarkMode ? 'text-[#A0A0A0]' : 'text-gray-500',
     textAccent: isDarkMode ? 'text-[#5DD62C]' : 'text-[#337418]',
-    borderAccent: isDarkMode ? 'border-[#5DD62C]' : 'border-[#337418]', 
+    borderAccent: isDarkMode ? 'border-[#5DD62C]' : 'border-[#337418]',
     borderAccentSoft: isDarkMode ? 'border-[#5DD62C]/20' : 'border-[#337418]/30',
-    bgAccentSoft: isDarkMode ? 'bg-[#5DD62C]/10' : 'bg-[#5DD62C]/20', 
+    bgAccentSoft: isDarkMode ? 'bg-[#5DD62C]/10' : 'bg-[#5DD62C]/20',
     hoverCard: isDarkMode ? 'hover:bg-[#2A2A2A]' : 'hover:bg-gray-50',
-    hoverBorderAccent: isDarkMode ? 'hover:border-[#5DD62C]/50' : 'hover:border-[#337418]/50', 
+    hoverBorderAccent: isDarkMode ? 'hover:border-[#5DD62C]/50' : 'hover:border-[#337418]/50',
     divider: isDarkMode ? 'divide-[#333333]' : 'divide-gray-200',
     ring: isDarkMode ? 'hover:ring-[#333333]' : 'hover:ring-gray-300'
   };
@@ -121,80 +127,126 @@ function App() {
   const carregarPedidos = useCallback((silencioso = false) => {
     if (silencioso && isUpdatingRef.current) return;
     if (!silencioso) setCarregando(true)
-    
+
     axios.get(`${API_URL}/api/pedidos?ordenar_por=${ordenarPor}&ordem=${ordem}`)
       .then(response => {
-        if (isUpdatingRef.current) return; 
+        if (isUpdatingRef.current) return;
         setPedidos(Array.isArray(response.data) ? response.data : [])
         if (!silencioso) setCarregando(false)
       })
-      .catch(error => { 
-        console.error("Erro API Pedidos:", error); 
-        if (!silencioso) setCarregando(false) 
+      .catch(error => {
+        console.error("Erro API Pedidos:", error);
+        if (!silencioso) setCarregando(false)
       })
   }, [ordenarPor, ordem])
 
   const carregarCompras = useCallback((silencioso = false) => {
     if (silencioso && isUpdatingRef.current) return;
-    axios.get(`${API_URL}/api/compras`).then(res => { 
-      if (!isUpdatingRef.current) setCompras(Array.isArray(res.data) ? res.data : []) 
+    axios.get(`${API_URL}/api/compras`).then(res => {
+      if (!isUpdatingRef.current) setCompras(Array.isArray(res.data) ? res.data : [])
     })
   }, [])
 
   const carregarOrcamentos = useCallback((silencioso = false) => {
     if (silencioso && isUpdatingRef.current) return;
-    axios.get(`${API_URL}/api/orcamentos`).then(res => { 
-      if (!isUpdatingRef.current) setOrcamentos(Array.isArray(res.data) ? res.data : []) 
+    axios.get(`${API_URL}/api/orcamentos`).then(res => {
+      if (!isUpdatingRef.current) setOrcamentos(Array.isArray(res.data) ? res.data : [])
     })
+  }, [])
+
+  const carregarEstoque = useCallback((silencioso = false) => {
+    if (silencioso && isUpdatingRef.current) return;
+    axios.get(`${API_URL}/api/estoque`).then(res => {
+      if (!isUpdatingRef.current) setEstoque(Array.isArray(res.data) ? res.data : [])
+    }).catch(err => console.error("Erro API Estoque", err));
   }, [])
 
   const salvarNotaOrcamento = (idOrcamento) => {
     iniciarAtualizacao();
     axios.put(`${API_URL}/api/orcamentos/${idOrcamento}/nota`, { anotacao: textoNotaTemp })
       .then(res => {
-         finalizarAtualizacao();
-         setOrcamentos(prev => prev.map(o => o.id_orcamento === idOrcamento ? { ...o, anotacao: textoNotaTemp, data_anotacao: res.data.data_atualizacao } : o));
-         setEditandoNotaOrcamento(null);
+        finalizarAtualizacao();
+        setOrcamentos(prev => prev.map(o => o.id_orcamento === idOrcamento ? { ...o, anotacao: textoNotaTemp, data_anotacao: res.data.data_atualizacao } : o));
+        setEditandoNotaOrcamento(null);
       })
       .catch(err => {
-         finalizarAtualizacao();
-         console.error("Erro ao salvar nota", err);
+        finalizarAtualizacao();
+        console.error("Erro ao salvar nota", err);
       });
   }
 
+  const handleIdFtBlur = async () => {
+    if (!ftForm.id_ft_principal) return;
+    setBuscandoFt(true);
+    try {
+      const res = await axios.get(`${API_URL}/api/ft/${ftForm.id_ft_principal}`);
+      const data = res.data;
+      setFtForm(prev => ({
+        ...prev,
+        referencia: data.referencia || '',
+        peso_conjunto: data.peso_conjunto || '',
+        preco_conjunto: data.preco_conjunto || '',
+        id_qualidfab: data.id_qualidfab || '',
+        id_ondafab: data.id_ondafab || '',
+        nome_cliente: data.nome_cliente || '',
+        gramatura: data.gramatura || '',
+      }));
+    } catch (err) {
+      console.error(err);
+      alert('FT não encontrada ou erro na busca.');
+    } finally {
+      setBuscandoFt(false);
+    }
+  };
+
+  const handleSalvarEstoqueManual = async () => {
+    iniciarAtualizacao();
+    try {
+      await axios.post(`${API_URL}/api/estoque`, ftForm);
+      setModalEstoqueAberto(false);
+      setFtForm({ id_ft_principal: '', referencia: '', peso_conjunto: '', preco_conjunto: '', id_qualidfab: '', id_ondafab: '', nome_cliente: '', gramatura: '', quantidade: '' });
+      carregarEstoque(true);
+    } catch (err) {
+      console.error(err);
+      alert('Erro ao salvar no estoque.');
+    } finally {
+      finalizarAtualizacao();
+    }
+  };
+
   const carregarResumos = useCallback(() => {
-    Promise.all([ 
-      axios.get(`${API_URL}/api/resumo/mapa`), 
-      axios.get(`${API_URL}/api/resumo/dashboard`) 
+    Promise.all([
+      axios.get(`${API_URL}/api/resumo/mapa`),
+      axios.get(`${API_URL}/api/resumo/dashboard`)
     ]).then(([resMapa, resDash]) => {
-        setResumoMapa(prev => ({ 
-          ...prev, 
-          peso_entregue_mes_kg: resMapa.data?.peso_entregue_mes_kg || 0 
+      setResumoMapa(prev => ({
+        ...prev,
+        peso_entregue_mes_kg: resMapa.data?.peso_entregue_mes_kg || 0
+      }))
+
+      if (resDash.data) {
+        setDadosDashboard(prev => ({
+          ...prev,
+          ruycepel: resDash.data.ruycepel || prev.ruycepel,
+          elly: resDash.data.elly || prev.elly,
+          total: resDash.data.total || prev.total,
+          mes_referencia: resDash.data.mes_referencia
         }))
-        
-        if (resDash.data) {
-          setDadosDashboard(prev => ({
-            ...prev, 
-            ruycepel: resDash.data.ruycepel || prev.ruycepel,
-            elly: resDash.data.elly || prev.elly,
-            total: resDash.data.total || prev.total,
-            mes_referencia: resDash.data.mes_referencia
-          }))
-        }
-      }).catch(err => console.error("Erro API Resumos:", err))
+      }
+    }).catch(err => console.error("Erro API Resumos:", err))
   }, [])
 
   useEffect(() => {
     const pedidosAtivosGerais = pedidos.filter(p => p.status !== 'Faturada');
     const fatAcumulado = pedidosAtivosGerais.reduce((acc, p) => acc + (p.faturamento_total || 0), 0);
     const pesoTotal = pedidosAtivosGerais.reduce((acc, p) => acc + (p.peso_total_kg || 0), 0);
-    
+
     let fatPronto = 0, pesoPronto = 0;
     const distrib = { Pendente: 0, Compras: 0, Produção: 0, Parcial: 0, Pronto: 0, Faturada: 0 };
-    
+
     pedidos.forEach(p => {
-      p.itens.forEach(item => { 
-        if (distrib[item.statusOF] !== undefined) distrib[item.statusOF]++; 
+      p.itens.forEach(item => {
+        if (distrib[item.statusOF] !== undefined) distrib[item.statusOF]++;
 
         if (item.statusOF === 'Pronto') {
           const qtdCaixas = item.qtd_produzida !== null && item.qtd_produzida !== undefined && item.qtd_produzida !== "" ? parseFloat(item.qtd_produzida) : item.qtd_restante;
@@ -205,43 +257,45 @@ function App() {
       });
     });
 
-    setResumoMapa(prev => ({ 
-      ...prev, 
-      faturamento_pronto: fatPronto, 
-      peso_pronto_kg: pesoPronto 
+    setResumoMapa(prev => ({
+      ...prev,
+      faturamento_pronto: fatPronto,
+      peso_pronto_kg: pesoPronto
     }));
-    
-    setDadosDashboard(prev => ({ 
-      ...prev, 
-      faturamento_carteira: fatAcumulado, 
-      peso_carteira_kg: pesoTotal, 
-      total_pedidos_carteira: pedidosAtivosGerais.length, 
-      distribuicao_kanban: distrib 
+
+    setDadosDashboard(prev => ({
+      ...prev,
+      faturamento_carteira: fatAcumulado,
+      peso_carteira_kg: pesoTotal,
+      total_pedidos_carteira: pedidosAtivosGerais.length,
+      distribuicao_kanban: distrib
     }));
   }, [pedidos]);
 
   useEffect(() => {
-    carregarPedidos(); 
-    carregarCompras(); 
+    carregarPedidos();
+    carregarCompras();
     carregarOrcamentos();
+    carregarEstoque();
     carregarResumos();
-    
-    const intervalId = setInterval(() => { 
-      carregarPedidos(true); 
-      carregarCompras(true); 
+
+    const intervalId = setInterval(() => {
+      carregarPedidos(true);
+      carregarCompras(true);
       carregarOrcamentos(true);
-      carregarResumos(); 
+      carregarEstoque(true);
+      carregarResumos();
     }, 5000)
-    
+
     return () => clearInterval(intervalId)
-  }, [carregarPedidos, carregarCompras, carregarOrcamentos, carregarResumos])
+  }, [carregarPedidos, carregarCompras, carregarOrcamentos, carregarEstoque, carregarResumos])
 
-  useEffect(() => { 
-    setLimiteExibicao(20); 
-  }, [termoPesquisa, termoPesquisaOrcamento, abaAtiva, filtroStatusPedido, modoPesoAberto]);
+  useEffect(() => {
+    setLimiteExibicao(20);
+  }, [termoPesquisa, termoPesquisaOrcamento, termoPesquisaEstoque, abaAtiva, filtroStatusPedido, modoPesoAberto]);
 
-  useEffect(() => { 
-    if (modalBipadorAberto && inputBipadorRef.current) inputBipadorRef.current.focus(); 
+  useEffect(() => {
+    if (modalBipadorAberto && inputBipadorRef.current) inputBipadorRef.current.focus();
   }, [modalBipadorAberto]);
 
   const recalcularTotaisPedido = (pedidoParam) => {
@@ -264,27 +318,27 @@ function App() {
 
   const calcularDistancia = (coord1, coord2) => {
     if (!coord1 || !coord2) return 0;
-    const R = 6371; 
+    const R = 6371;
     const dLat = (coord2[0] - coord1[0]) * Math.PI / 180;
     const dLon = (coord2[1] - coord1[1]) * Math.PI / 180;
-    const a = Math.sin(dLat/2) * Math.sin(dLat/2) + Math.cos(coord1[0] * Math.PI / 180) * Math.cos(coord2[0] * Math.PI / 180) * Math.sin(dLon/2) * Math.sin(dLon/2);
-    return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+    const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) + Math.cos(coord1[0] * Math.PI / 180) * Math.cos(coord2[0] * Math.PI / 180) * Math.sin(dLon / 2) * Math.sin(dLon / 2);
+    return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
   }
 
   const calcularRotaOtimizada = useCallback(async (idsSelecionados, listaPedidos) => {
-    if (!idsSelecionados || idsSelecionados.length === 0) { 
-      setRotaIdaGeometria([]); 
-      setRotaVoltaGeometria([]); 
-      setOrdemEntregas([]); 
-      return; 
+    if (!idsSelecionados || idsSelecionados.length === 0) {
+      setRotaIdaGeometria([]);
+      setRotaVoltaGeometria([]);
+      setOrdemEntregas([]);
+      return;
     }
-    
+
     const pedidosParaRota = (listaPedidos || pedidos).filter(p => p && idsSelecionados.includes(p.id) && p.latitude && p.longitude);
-    if (pedidosParaRota.length === 0) { 
-      setRotaIdaGeometria([]); 
-      setRotaVoltaGeometria([]); 
-      setOrdemEntregas([]); 
-      return; 
+    if (pedidosParaRota.length === 0) {
+      setRotaIdaGeometria([]);
+      setRotaVoltaGeometria([]);
+      setOrdemEntregas([]);
+      return;
     }
 
     if (abortControllerOSRM.current) abortControllerOSRM.current.abort();
@@ -292,21 +346,21 @@ function App() {
 
     try {
       let coordenadasString = `${COORDENADAS_EMPRESA[1]},${COORDENADAS_EMPRESA[0]}`;
-      pedidosParaRota.forEach(p => { 
-        coordenadasString += `;${p.longitude},${p.latitude}`; 
+      pedidosParaRota.forEach(p => {
+        coordenadasString += `;${p.longitude},${p.latitude}`;
       });
-      
+
       const url = `https://router.project-osrm.org/trip/v1/driving/${coordenadasString}?overview=full&geometries=geojson&source=first&destination=any`;
       const res = await axios.get(url, { signal: abortControllerOSRM.current.signal });
-      
+
       if (res.data.trips && res.data.trips.length > 0) {
         const coordenadasInvertidas = res.data.trips[0].geometry.coordinates.map(coord => [coord[1], coord[0]]);
         const waypointsOrdenados = [...res.data.waypoints].sort((a, b) => a.waypoint_index - b.waypoint_index).filter(wp => wp.waypoint_index !== 0);
-        
+
         const ordemCalculada = waypointsOrdenados.map(wp => {
-            const idxOriginal = wp.trips_index !== undefined ? wp.trips_index : wp.waypoint_index;
-            return pedidosParaRota[idxOriginal - 1] ? pedidosParaRota[idxOriginal - 1].id : null;
-        }).filter(id => id !== null); 
+          const idxOriginal = wp.trips_index !== undefined ? wp.trips_index : wp.waypoint_index;
+          return pedidosParaRota[idxOriginal - 1] ? pedidosParaRota[idxOriginal - 1].id : null;
+        }).filter(id => id !== null);
 
         setOrdemEntregas(ordemCalculada);
         const ultimoPedidoId = ordemCalculada[ordemCalculada.length - 1];
@@ -315,45 +369,45 @@ function App() {
         if (ultimoPedido) {
           const coordUltimoCliente = [ultimoPedido.latitude, ultimoPedido.longitude];
           let indiceCorte = 0, menorDistancia = Infinity;
-          
+
           coordenadasInvertidas.forEach((coord, index) => {
             const dist = calcularDistancia(coord, coordUltimoCliente);
-            if (dist < menorDistancia) { 
-              menorDistancia = dist; 
-              indiceCorte = index; 
+            if (dist < menorDistancia) {
+              menorDistancia = dist;
+              indiceCorte = index;
             }
           });
-          
+
           setRotaIdaGeometria(coordenadasInvertidas.slice(0, indiceCorte + 1));
           setRotaVoltaGeometria(coordenadasInvertidas.slice(indiceCorte));
         } else {
-          setRotaIdaGeometria(coordenadasInvertidas); 
+          setRotaIdaGeometria(coordenadasInvertidas);
           setRotaVoltaGeometria([]);
         }
       }
-    } catch (err) { 
-      if (!axios.isCancel(err)) console.error("Erro OSRM:", err); 
+    } catch (err) {
+      if (!axios.isCancel(err)) console.error("Erro OSRM:", err);
     }
   }, [pedidos]);
 
-  useEffect(() => { 
-    calcularRotaOtimizada(pedidosSelecionados, pedidos); 
+  useEffect(() => {
+    calcularRotaOtimizada(pedidosSelecionados, pedidos);
   }, [pedidosSelecionados, pedidos, calcularRotaOtimizada]);
 
   const darBaixaCompra = (idCompra) => {
     iniciarAtualizacao();
     setCompras(prev => prev.map(c => c.idCompra === idCompra ? { ...c, status: 'RECEBIDA', dataRecebida: new Date().toLocaleDateString('pt-BR') } : c));
-    
+
     axios.put(`${API_URL}/api/compras/${idCompra}/baixa`)
-      .then(() => { 
-        finalizarAtualizacao(); 
-        carregarCompras(true); 
-        carregarPedidos(true); 
-        carregarResumos(); 
+      .then(() => {
+        finalizarAtualizacao();
+        carregarCompras(true);
+        carregarPedidos(true);
+        carregarResumos();
       })
-      .catch(() => { 
-        finalizarAtualizacao(); 
-        carregarCompras(true); 
+      .catch(() => {
+        finalizarAtualizacao();
+        carregarCompras(true);
       });
   }
 
@@ -361,22 +415,22 @@ function App() {
     if (!pedido) return;
     setPedidosSelecionados(prev => prev.includes(pedido.id) ? prev.filter(id => id !== pedido.id) : [...prev, pedido.id]);
   }
-  
-  const toggleExpandirPedido = (idPedido) => { 
-    setPedidosExpandidos(prev => prev.includes(idPedido) ? prev.filter(id => id !== idPedido) : [...prev, idPedido]) 
-  }
-  
-  const toggleExpandirCompra = (idCompra) => { 
-    setComprasExpandidas(prev => prev.includes(idCompra) ? prev.filter(id => id !== idCompra) : [...prev, idCompra]) 
+
+  const toggleExpandirPedido = (idPedido) => {
+    setPedidosExpandidos(prev => prev.includes(idPedido) ? prev.filter(id => id !== idPedido) : [...prev, idPedido])
   }
 
-  const toggleExpandirOrcamento = (idOrcamento) => { 
-    setOrcamentosExpandidos(prev => prev.includes(idOrcamento) ? prev.filter(id => id !== idOrcamento) : [...prev, idOrcamento]) 
+  const toggleExpandirCompra = (idCompra) => {
+    setComprasExpandidas(prev => prev.includes(idCompra) ? prev.filter(id => id !== idCompra) : [...prev, idCompra])
+  }
+
+  const toggleExpandirOrcamento = (idOrcamento) => {
+    setOrcamentosExpandidos(prev => prev.includes(idOrcamento) ? prev.filter(id => id !== idOrcamento) : [...prev, idOrcamento])
   }
 
   const alternarStatusOf = (idPedido, idOf, novoStatus, qtdProduzida = null) => {
     iniciarAtualizacao();
-    
+
     setPedidos(prevPedidos => {
       return prevPedidos.map(p => {
         if (p.id === idPedido) {
@@ -389,44 +443,44 @@ function App() {
         return p
       })
     })
-    
+
     axios.put(`${API_URL}/api/pedidos/${idPedido}/itens/${idOf}/status`, { status: novoStatus, qtd_produzida: qtdProduzida })
-      .then(() => { 
-        finalizarAtualizacao(); 
-        carregarResumos() 
+      .then(() => {
+        finalizarAtualizacao();
+        carregarResumos()
       })
-      .catch(() => { 
-        finalizarAtualizacao(); 
-        carregarPedidos(true) 
+      .catch(() => {
+        finalizarAtualizacao();
+        carregarPedidos(true)
       })
   }
 
   const handleBiparOF = async (e) => {
     if (e.key === 'Enter') {
       e.preventDefault();
-      
+
       if (!ofBipador.trim()) {
         if (inputBipadorRef.current) inputBipadorRef.current.focus();
         return;
       }
-      
+
       iniciarAtualizacao();
       const numeroOF = ofBipador.trim();
       const qtdNum = qtdProduzidaBipador.trim() ? parseFloat(qtdProduzidaBipador.trim()) : null;
-      setOfBipador(""); 
+      setOfBipador("");
       setQtdProduzidaBipador("");
 
       setPedidos(prevPedidos => {
         return prevPedidos.map(p => {
           let encontrouOF = false;
           const novosItens = p.itens.map(item => {
-            if(String(item.id_numof) === numeroOF) { 
-              encontrouOF = true; 
-              return { ...item, statusOF: statusBipador, qtd_produzida: qtdNum || item.qtd_produzida, concluido: (statusBipador === "Pronto" || statusBipador === "Faturada") } 
+            if (String(item.id_numof) === numeroOF) {
+              encontrouOF = true;
+              return { ...item, statusOF: statusBipador, qtd_produzida: qtdNum || item.qtd_produzida, concluido: (statusBipador === "Pronto" || statusBipador === "Faturada") }
             }
             return item;
           });
-          
+
           if (encontrouOF) {
             const abertos = novosItens.filter(i => i.statusOF !== "Faturada");
             const todasConcluidas = abertos.length > 0 && abertos.every(i => i.statusOF === "Pronto");
@@ -439,50 +493,50 @@ function App() {
 
       try {
         await axios.put(`${API_URL}/api/ofs/status-rapido`, { id_of: numeroOF, status: statusBipador, qtd_produzida: qtdNum });
-        finalizarAtualizacao(); 
-        setMsgBipador({ texto: `OF ${numeroOF} salva!`, tipo: 'success' }); 
+        finalizarAtualizacao();
+        setMsgBipador({ texto: `OF ${numeroOF} salva!`, tipo: 'success' });
         carregarResumos();
       } catch (error) {
-        finalizarAtualizacao(); 
-        setMsgBipador({ texto: `Erro na OF ${numeroOF}`, tipo: 'error' }); 
-        carregarPedidos(true); 
+        finalizarAtualizacao();
+        setMsgBipador({ texto: `Erro na OF ${numeroOF}`, tipo: 'error' });
+        carregarPedidos(true);
       }
-      
+
       if (inputBipadorRef.current) {
         inputBipadorRef.current.focus();
       }
-      
-      setTimeout(() => setMsgBipador({texto: "", tipo: ""}), 3000); 
+
+      setTimeout(() => setMsgBipador({ texto: "", tipo: "" }), 3000);
     }
   }
 
   const alterarStatusPedido = (id, novoStatus) => {
     iniciarAtualizacao();
     setPedidos(prevPedidos => prevPedidos.map(p => p.id === id ? { ...p, status: novoStatus } : p));
-    
+
     axios.put(`${API_URL}/api/pedidos/${id}/status`, { status: novoStatus })
-      .then(() => { 
-        finalizarAtualizacao(); 
-        carregarResumos() 
+      .then(() => {
+        finalizarAtualizacao();
+        carregarResumos()
       })
-      .catch(() => { 
-        finalizarAtualizacao(); 
-        carregarPedidos(true); 
+      .catch(() => {
+        finalizarAtualizacao();
+        carregarPedidos(true);
       });
   }
 
-  const alterarAba = (novaAba) => { 
-    iniciarAtualizacao(); 
-    setAbaAtiva(novaAba); 
-    finalizarAtualizacao(); 
+  const alterarAba = (novaAba) => {
+    iniciarAtualizacao();
+    setAbaAtiva(novaAba);
+    finalizarAtualizacao();
   };
 
   const obterContadorOfs = (pedido) => {
     if (!pedido || !pedido.itens) return { concluidas: 0, total: 0 }
     const validas = pedido.itens.filter(i => i.statusOF !== "Faturada")
-    return { 
-      concluidas: validas.filter(i => i.statusOF === "Pronto").length, 
-      total: validas.length 
+    return {
+      concluidas: validas.filter(i => i.statusOF === "Pronto").length,
+      total: validas.length
     }
   }
 
@@ -490,11 +544,11 @@ function App() {
     if (!dataProdStr) return { texto: 'INÍCIO NÃO REGISTRADO', dias: 0 };
     const d = new Date(dataProdStr.replace(" ", "T"));
     if (isNaN(d)) return { texto: 'INÍCIO NÃO REGISTRADO', dias: 0 };
-    
+
     const diffTime = Math.abs(new Date() - d);
     const diffDays = Math.floor(diffTime / (1000 * 60 * 60 * 24));
     const dataFormatada = d.toLocaleDateString('pt-BR');
-    
+
     if (diffDays === 0) return { texto: `HOJE (${dataFormatada})`, dias: 0 };
     if (diffDays === 1) return { texto: `1 DIA (${dataFormatada})`, dias: 1 };
     return { texto: `${diffDays} DIAS (${dataFormatada})`, dias: diffDays };
@@ -504,10 +558,10 @@ function App() {
     if (!dataStr) return { texto: 'N/A', dias: 0 };
     const d = new Date(dataStr.replace(" ", "T"));
     if (isNaN(d)) return { texto: 'N/A', dias: 0 };
-    
+
     const diffTime = Math.abs(new Date() - d);
     const diffDays = Math.floor(diffTime / (1000 * 60 * 60 * 24));
-    
+
     if (diffDays === 0) return { texto: `Emitido Hoje`, dias: 0 };
     if (diffDays === 1) return { texto: `Ontem`, dias: 1 };
     return { texto: `Há ${diffDays} Dias`, dias: diffDays };
@@ -518,56 +572,66 @@ function App() {
       if (!p) return false;
       const termo = termoPesquisa.toLowerCase();
       if (!termo) return true;
-      
-      const matchPedido = String(p.id_pedido || '').toLowerCase().includes(termo) || 
-                          String(p.cliente || '').toLowerCase().includes(termo) || 
-                          String(p.pedido_cliente || '').toLowerCase().includes(termo);
-                          
+
+      const matchPedido = String(p.id_pedido || '').toLowerCase().includes(termo) ||
+        String(p.cliente || '').toLowerCase().includes(termo) ||
+        String(p.pedido_cliente || '').toLowerCase().includes(termo);
+
       const matchOF = p.itens && p.itens.some(item => String(item.id_numof || '').toLowerCase().includes(termo));
-      
+
       return matchPedido || matchOF;
     });
   }, [pedidos, termoPesquisa]);
 
   // FILTRO INTELIGENTE GERAL PARA A TELA DE CONTROLE DE PEDIDOS
   const pedidosAbaControle = useMemo(() => {
-     let filtrados = pedidosFiltrados;
-     
-     if (filtroStatusPedido === 'aberto') {
-         filtrados = filtrados.filter(p => p.status !== 'Faturada');
-     } else {
-         filtrados = filtrados.filter(p => p.status === 'Faturada');
-     }
+    let filtrados = pedidosFiltrados;
 
-     if (filtroStatusPedido === 'aberto' && modoPesoAberto === 'mes') {
-         const endOfMonth = new Date();
-         endOfMonth.setFullYear(endOfMonth.getFullYear(), endOfMonth.getMonth() + 1, 0);
-         const endOfMonthStr = endOfMonth.toISOString().split('T')[0];
-         filtrados = filtrados.filter(p => p.raw_entrega && p.raw_entrega <= endOfMonthStr);
-     }
+    if (filtroStatusPedido === 'aberto') {
+      filtrados = filtrados.filter(p => p.status !== 'Faturada');
+    } else {
+      filtrados = filtrados.filter(p => p.status === 'Faturada');
+    }
 
-     return filtrados;
+    if (filtroStatusPedido === 'aberto' && modoPesoAberto === 'mes') {
+      const endOfMonth = new Date();
+      endOfMonth.setFullYear(endOfMonth.getFullYear(), endOfMonth.getMonth() + 1, 0);
+      const endOfMonthStr = endOfMonth.toISOString().split('T')[0];
+      filtrados = filtrados.filter(p => p.raw_entrega && p.raw_entrega <= endOfMonthStr);
+    }
+
+    return filtrados;
   }, [pedidosFiltrados, filtroStatusPedido, modoPesoAberto]);
 
   const pedidosAbaControlePaginados = useMemo(() => pedidosAbaControle.slice(0, limiteExibicao), [pedidosAbaControle, limiteExibicao]);
-  
+
   const pedidosProntosParaMapa = useMemo(() => pedidos.filter(p => p.status === 'Pronto' && p.total_itens_abertos > 0), [pedidos]);
 
   const orcamentosFiltrados = useMemo(() => {
     return orcamentos.filter(o => {
-       if (!o) return false;
-       const termo = termoPesquisaOrcamento.toLowerCase();
-       if (!termo) return true;
-       return String(o.id_orcamento || '').toLowerCase().includes(termo) || 
-              String(o.cliente || '').toLowerCase().includes(termo) || 
-              String(o.comprador || '').toLowerCase().includes(termo);
+      if (!o) return false;
+      const termo = termoPesquisaOrcamento.toLowerCase();
+      if (!termo) return true;
+      return String(o.id_orcamento || '').toLowerCase().includes(termo) ||
+        String(o.cliente || '').toLowerCase().includes(termo) ||
+        String(o.comprador || '').toLowerCase().includes(termo);
     }).slice(0, limiteExibicao);
   }, [orcamentos, termoPesquisaOrcamento, limiteExibicao]);
+
+  const estoqueFiltrado = useMemo(() => {
+    return estoque.filter(e => {
+      if (!e) return false;
+      const termo = termoPesquisaEstoque.toLowerCase();
+      if (!termo) return true;
+      return String(e.referencia || '').toLowerCase().includes(termo) ||
+        String(e.cliente || '').toLowerCase().includes(termo);
+    }).slice(0, limiteExibicao);
+  }, [estoque, termoPesquisaEstoque, limiteExibicao]);
 
   const renderizarTagPrazo = (dias, dataEntrega) => {
     if (dias === null || dias === undefined || isNaN(dias)) return <span className={t.textSecondary}>-</span>;
     let tag = null;
-    
+
     if (dias < 0) {
       tag = <span className={`inline-flex items-center gap-1.5 px-3 py-1 text-[11px] font-semibold rounded-full ${isDarkMode ? 'bg-red-500/10 text-red-400 border-red-500/20' : 'bg-red-100 text-red-700 border-red-300'} whitespace-nowrap`}><span className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse"></span>Atrasado ({Math.abs(dias)}d)</span>
     } else if (dias === 0 || dias === 1) {
@@ -575,7 +639,7 @@ function App() {
     } else {
       tag = <span className={`inline-flex items-center gap-1.5 px-3 py-1 text-[11px] font-semibold rounded-full ${t.bgAccentSoft} ${t.textAccent} border ${t.borderAccentSoft} whitespace-nowrap`}><span className="w-1.5 h-1.5 rounded-full bg-[#5DD62C]"></span>Prazo: {dias}d</span>
     }
-    
+
     return (
       <div className="flex flex-col md:items-end items-start sm:items-center gap-1">
         {tag}
@@ -599,12 +663,12 @@ function App() {
   const renderCartaoCompra = (compra) => {
     const isExpanded = comprasExpandidas.includes(compra.idCompra);
     let todosClientes = [];
-    
-    if(compra.itens) {
-      compra.itens.forEach(item => { 
-        if(item.ofs) item.ofs.forEach(of => { 
-          if(of.cliente) todosClientes.push(of.cliente); 
-        }); 
+
+    if (compra.itens) {
+      compra.itens.forEach(item => {
+        if (item.ofs) item.ofs.forEach(of => {
+          if (of.cliente) todosClientes.push(of.cliente);
+        });
       });
     }
     const clientesUnicos = [...new Set(todosClientes)].join(", ");
@@ -615,12 +679,12 @@ function App() {
         <div className={`p-4 md:p-5 flex flex-col md:flex-row justify-between items-start md:items-center gap-4 cursor-pointer ${t.hoverCard} transition-colors`} onClick={() => toggleExpandirCompra(compra.idCompra)}>
           <div className="flex-1 min-w-[250px] w-full">
             <div className="flex items-center gap-2 mb-1.5 flex-wrap">
-               <span className={`text-xs font-mono font-bold ${t.bgAccentSoft} ${t.textAccent} px-2 py-0.5 rounded border ${t.borderAccentSoft}`}>OC: {compra.idCompra}</span>
-               <span className={`text-[10px] px-2 py-0.5 rounded font-bold uppercase border ${!isRecebida ? (isDarkMode ? 'bg-amber-500/10 text-amber-400 border-amber-500/20' : 'bg-amber-100 text-amber-700 border-amber-300') : `${t.bgAccentSoft} ${t.textAccent} ${t.borderAccentSoft}`}`}>{!isRecebida ? 'Em Compras' : 'Recebida'}</span>
+              <span className={`text-xs font-mono font-bold ${t.bgAccentSoft} ${t.textAccent} px-2 py-0.5 rounded border ${t.borderAccentSoft}`}>OC: {compra.idCompra}</span>
+              <span className={`text-[10px] px-2 py-0.5 rounded font-bold uppercase border ${!isRecebida ? (isDarkMode ? 'bg-amber-500/10 text-amber-400 border-amber-500/20' : 'bg-amber-100 text-amber-700 border-amber-300') : `${t.bgAccentSoft} ${t.textAccent} ${t.borderAccentSoft}`}`}>{!isRecebida ? 'Em Compras' : 'Recebida'}</span>
             </div>
             <h3 className={`font-bold ${t.textPrimary} text-base leading-tight mt-1`}>{compra.fornecedor || 'Fornecedor Não Informado'}</h3>
           </div>
-          
+
           <div className={`flex flex-wrap items-center gap-4 md:gap-6 text-xs ${t.textSecondary} w-full md:w-auto justify-between md:justify-end border-t ${t.border} md:border-t-0 pt-3 md:pt-0`}>
             <div className="text-left md:text-center w-[45%] md:w-auto">
               <span className="block text-[10px] uppercase mb-0.5">Emissão</span>
@@ -636,28 +700,28 @@ function App() {
             </div>
             <div className="text-left md:text-center w-[45%] md:w-auto">
               <span className="block text-[10px] uppercase mb-0.5">Valor Total</span>
-              <span className={`font-mono font-semibold ${t.textPrimary}`}>R$ {(compra.valorTotal || 0).toLocaleString('pt-BR', {minimumFractionDigits: 2})}</span>
+              <span className={`font-mono font-semibold ${t.textPrimary}`}>R$ {(compra.valorTotal || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</span>
             </div>
-            
+
             <div className={`pt-3 md:pt-0 md:pl-4 border-t md:border-t-0 md:border-l ${t.border} flex items-center justify-end w-full md:w-auto md:min-w-[140px]`}>
-               {!isRecebida ? (
-                 <button onClick={(e) => { e.stopPropagation(); darBaixaCompra(compra.idCompra); }} className="bg-[#5DD62C] hover:bg-[#337418] text-[#0F0F0F] hover:text-[#F8F8F8] text-xs font-bold px-4 py-3 md:py-2.5 rounded-lg shadow-lg hover:scale-105 w-full text-center transition-all">
-                   Dar Baixa
-                 </button>
-               ) : (
-                 <div className={`text-[11px] ${t.textSecondary} font-semibold flex flex-row md:flex-col items-center md:items-end justify-between w-full`}>
-                   <span className={`${t.textAccent} flex items-center gap-1`}><svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7" /></svg>Baixa Realizada</span>
-                   <span className={t.textPrimary}>{compra.dataRecebida}</span>
-                 </div>
-               )}
+              {!isRecebida ? (
+                <button onClick={(e) => { e.stopPropagation(); darBaixaCompra(compra.idCompra); }} className="bg-[#5DD62C] hover:bg-[#337418] text-[#0F0F0F] hover:text-[#F8F8F8] text-xs font-bold px-4 py-3 md:py-2.5 rounded-lg shadow-lg hover:scale-105 w-full text-center transition-all">
+                  Dar Baixa
+                </button>
+              ) : (
+                <div className={`text-[11px] ${t.textSecondary} font-semibold flex flex-row md:flex-col items-center md:items-end justify-between w-full`}>
+                  <span className={`${t.textAccent} flex items-center gap-1`}><svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7" /></svg>Baixa Realizada</span>
+                  <span className={t.textPrimary}>{compra.dataRecebida}</span>
+                </div>
+              )}
             </div>
           </div>
         </div>
-        
+
         <div className={`px-4 md:px-5 py-2.5 ${t.innerAlt} border-t ${t.border} text-xs flex justify-between items-center ${t.textSecondary}`}>
-           <span className="truncate pr-4"><strong>Cliente(s):</strong> <span className={t.textPrimary}>{clientesUnicos || '-'}</span></span>
+          <span className="truncate pr-4"><strong>Cliente(s):</strong> <span className={t.textPrimary}>{clientesUnicos || '-'}</span></span>
         </div>
-        
+
         {isExpanded && (
           <div className={`${t.inner} p-4 md:p-5 border-t ${t.border}`}>
             <h4 className={`text-xs font-bold ${t.textSecondary} uppercase tracking-wider mb-4`}>Itens da Compra e OFs Vinculadas</h4>
@@ -681,14 +745,14 @@ function App() {
                       if (!itemGroup.ofs || itemGroup.ofs.length === 0) {
                         return (
                           <tr key={`item-${idxGroup}`} className={`${t.hoverCard}`}>
-                             <td className={`py-3 px-3 font-mono font-bold ${t.textSecondary}`}>-</td>
-                             <td className={`py-3 px-3 font-medium ${t.textSecondary}`}>-</td>
-                             <td className={`py-3 px-3 font-medium ${t.textSecondary}`}>Item sem OF: {itemGroup.item}</td>
-                             <td className="py-3 px-3 text-center font-mono">-</td>
-                             <td className="py-3 px-3 text-center font-mono">{itemGroup.quantidadeChapa}</td>
-                             <td className="py-3 px-3 text-right font-mono">R$ {itemGroup.vltot.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</td>
-                             <td className={`py-3 px-3 text-right font-mono ${t.textAccent}`}>{formatarKg(itemGroup.pesoChapa)} kg</td>
-                             <td className="py-3 px-3 text-center">-</td>
+                            <td className={`py-3 px-3 font-mono font-bold ${t.textSecondary}`}>-</td>
+                            <td className={`py-3 px-3 font-medium ${t.textSecondary}`}>-</td>
+                            <td className={`py-3 px-3 font-medium ${t.textSecondary}`}>Item sem OF: {itemGroup.item}</td>
+                            <td className="py-3 px-3 text-center font-mono">-</td>
+                            <td className="py-3 px-3 text-center font-mono">{itemGroup.quantidadeChapa}</td>
+                            <td className="py-3 px-3 text-right font-mono">R$ {itemGroup.vltot.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</td>
+                            <td className={`py-3 px-3 text-right font-mono ${t.textAccent}`}>{formatarKg(itemGroup.pesoChapa)} kg</td>
+                            <td className="py-3 px-3 text-center">-</td>
                           </tr>
                         )
                       }
@@ -727,7 +791,7 @@ function App() {
 
   return (
     <div className={`min-h-screen ${t.bg} p-2 md:p-4 lg:p-8 font-sans w-full transition-colors duration-300`}>
-      
+
       {/* HEADER */}
       <header className={`w-full mx-auto mb-6 flex flex-col sm:flex-row justify-between items-start sm:items-center border-b ${t.border} pb-5 gap-4 relative z-10`}>
         <div className="flex items-center gap-3.5">
@@ -737,22 +801,26 @@ function App() {
             <p className={`${t.textSecondary} text-sm`}>Painel de Controle de Carga e Produção</p>
           </div>
         </div>
-        
+
         <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 w-full sm:w-auto">
-          
+
           <button onClick={() => setModalBipadorAberto(true)} className={`flex items-center justify-center gap-2 bg-[#5DD62C] hover:bg-[#337418] text-[#0F0F0F] hover:text-[#F8F8F8] px-4 py-3 sm:py-2 rounded-xl border border-transparent shadow-sm hover:scale-105 transition-all text-xs font-bold w-full sm:w-auto`}>
             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 4v16m8-8H4" /></svg>
             Lançador de OFs
           </button>
-          
+
           <button onClick={() => setIsDarkMode(!isDarkMode)} className={`flex items-center justify-center gap-2 ${t.card} px-4 py-3 sm:py-2 rounded-xl border ${t.border} shadow-sm hover:scale-105 transition-all text-xs font-bold ${t.textSecondary} hover:${t.textPrimary} w-full sm:w-auto`}>
             {isDarkMode ? 'Modo Claro' : 'Modo Escuro'}
           </button>
-          
           <div className={`flex items-center gap-2 ${t.card} px-4 py-3 sm:py-2 rounded-xl border ${t.border} justify-center shadow-md w-full sm:w-auto`}>
             <span className="w-2.5 h-2.5 rounded-full bg-[#5DD62C] animate-pulse"></span>
             <span className={`text-xs font-medium ${t.textPrimary}`}>Monitor Ativo</span>
           </div>
+
+          <button onClick={() => setModalEstoqueAberto(true)} className={`flex items-center justify-center gap-2 bg-[#5DD62C] hover:bg-[#337418] text-[#0F0F0F] hover:text-[#F8F8F8] px-4 py-3 sm:py-2 rounded-xl border border-transparent shadow-sm hover:scale-105 transition-all text-xs font-bold w-full sm:w-auto`}>
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4" /></svg>
+            Estoque Manual
+          </button>
         </div>
       </header>
 
@@ -766,7 +834,7 @@ function App() {
                 <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" /></svg>
               </button>
             </div>
-            
+
             <div className="space-y-6">
               <div>
                 <label className={`block text-xs font-bold ${t.textSecondary} uppercase tracking-wider mb-2`}>1. Escolha o Status</label>
@@ -783,37 +851,106 @@ function App() {
                 <label className={`block text-xs font-bold ${t.textSecondary} uppercase tracking-wider mb-2`}>2. Digite ou Bipe os Dados (Use TAB e ENTER)</label>
                 <div className="flex gap-3">
                   <div className="flex-1 relative">
-                    <input 
-                      ref={inputBipadorRef} 
-                      type="text" 
-                      value={ofBipador} 
-                      onChange={(e) => setOfBipador(e.target.value)} 
-                      onKeyDown={handleBiparOF} 
-                      placeholder="Nº da OF" 
-                      className={`w-full ${t.inner} ${t.textPrimary} border ${t.border} rounded-xl px-4 py-3 text-sm md:text-base font-mono font-bold focus:outline-none focus:border-[#5DD62C] transition-all`} 
+                    <input
+                      ref={inputBipadorRef}
+                      type="text"
+                      value={ofBipador}
+                      onChange={(e) => setOfBipador(e.target.value)}
+                      onKeyDown={handleBiparOF}
+                      placeholder="Nº da OF"
+                      className={`w-full ${t.inner} ${t.textPrimary} border ${t.border} rounded-xl px-4 py-3 text-sm md:text-base font-mono font-bold focus:outline-none focus:border-[#5DD62C] transition-all`}
                     />
                     <span className="absolute top-[-8px] left-3 bg-[#202020] px-1 text-[9px] text-[#5DD62C] font-bold uppercase">OF *</span>
                   </div>
                   <div className="flex-1 relative">
-                    <input 
-                      type="number" 
-                      value={qtdProduzidaBipador} 
-                      onChange={(e) => setQtdProduzidaBipador(e.target.value)} 
-                      onKeyDown={handleBiparOF} 
-                      placeholder="Qtd (Opcional)" 
-                      className={`w-full ${t.inner} ${t.textPrimary} border ${t.border} rounded-xl px-4 py-3 text-sm md:text-base font-mono focus:outline-none focus:border-[#5DD62C] transition-all`} 
+                    <input
+                      type="number"
+                      value={qtdProduzidaBipador}
+                      onChange={(e) => setQtdProduzidaBipador(e.target.value)}
+                      onKeyDown={handleBiparOF}
+                      placeholder="Qtd (Opcional)"
+                      className={`w-full ${t.inner} ${t.textPrimary} border ${t.border} rounded-xl px-4 py-3 text-sm md:text-base font-mono focus:outline-none focus:border-[#5DD62C] transition-all`}
                     />
                     <span className="absolute top-[-8px] left-3 bg-[#202020] px-1 text-[9px] text-gray-500 font-bold uppercase">Quantidade</span>
                   </div>
                 </div>
-                <p className={`text-[10px] mt-2 ${t.textSecondary} flex items-center gap-1`}><svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg> Se a quantidade ficar em branco, a Qtd Programada será usada.</p>
+                <p className={`text-[10px] mt-2 ${t.textSecondary} flex items-center gap-1`}><svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 16h-1v-4h-1m1-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg> Se a quantidade ficar em branco, a Qtd Programada será usada.</p>
               </div>
-              
+
               {msgBipador.texto && (
                 <div className={`p-3 rounded-lg text-xs font-bold text-center animate-pulse ${msgBipador.tipo === 'success' ? 'bg-[#5DD62C]/10 text-[#5DD62C] border border-[#5DD62C]/20' : 'bg-red-500/10 text-red-500 border border-red-500/20'}`}>
                   {msgBipador.texto}
                 </div>
               )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL ESTOQUE MANUAL */}
+      {modalEstoqueAberto && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+          <div className={`${t.card} border ${t.border} rounded-2xl shadow-2xl p-6 w-full max-w-3xl transform scale-100 transition-all max-h-[90vh] overflow-y-auto`}>
+            <div className="flex justify-between items-center mb-5 border-b border-gray-700 pb-3">
+              <h2 className={`text-lg font-bold ${t.textPrimary}`}>Adicionar ao Estoque Manual (FT)</h2>
+              <button onClick={() => setModalEstoqueAberto(false)} className={`text-[#A0A0A0] hover:text-red-500 transition-colors p-2`}>
+                <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" /></svg>
+              </button>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="col-span-full">
+                <label className={`block text-[11px] font-bold ${t.textSecondary} uppercase tracking-wider mb-1`}>ID FT Principal (Bipe/Digite e saia do campo para buscar)</label>
+                <div className="flex gap-2">
+                  <input type="text" value={ftForm.id_ft_principal} onChange={e => setFtForm(prev => ({ ...prev, id_ft_principal: e.target.value }))} onBlur={handleIdFtBlur} className={`w-full ${t.inner} ${t.textPrimary} border ${t.border} rounded-lg px-3 py-2 text-sm focus:border-sky-500 focus:outline-none`} placeholder="Bipe ou Digite o ID" />
+                  {buscandoFt && <span className="text-sky-500 text-xs self-center animate-pulse">Buscando...</span>}
+                </div>
+              </div>
+
+              <div>
+                <label className={`block text-[11px] font-bold ${t.textSecondary} uppercase tracking-wider mb-1`}>Referência</label>
+                <input type="text" value={ftForm.referencia} onChange={e => setFtForm(prev => ({ ...prev, referencia: e.target.value }))} className={`w-full ${t.inner} ${t.textPrimary} border ${t.border} rounded-lg px-3 py-2 text-sm focus:border-sky-500 focus:outline-none`} disabled />
+              </div>
+
+              <div>
+                <label className={`block text-[11px] font-bold ${t.textSecondary} uppercase tracking-wider mb-1`}>Cliente</label>
+                <input type="text" value={ftForm.nome_cliente} onChange={e => setFtForm(prev => ({ ...prev, nome_cliente: e.target.value }))} className={`w-full ${t.inner} ${t.textPrimary} border ${t.border} rounded-lg px-3 py-2 text-sm focus:border-sky-500 focus:outline-none`} disabled />
+              </div>
+
+              <div>
+                <label className={`block text-[11px] font-bold ${t.textSecondary} uppercase tracking-wider mb-1 text-sky-400`}>Peso do Conjunto (kg)</label>
+                <input type="number" step="0.01" value={ftForm.peso_conjunto} onChange={e => setFtForm(prev => ({ ...prev, peso_conjunto: e.target.value }))} className={`w-full bg-sky-500/10 ${t.textPrimary} border border-sky-500/50 rounded-lg px-3 py-2 text-sm focus:border-sky-500 focus:outline-none`} disabled />
+              </div>
+
+              <div>
+                <label className={`block text-[11px] font-bold ${t.textSecondary} uppercase tracking-wider mb-1 text-sky-400`}>Preço do Conjunto (R$)</label>
+                <input type="number" step="0.01" value={ftForm.preco_conjunto} onChange={e => setFtForm(prev => ({ ...prev, preco_conjunto: e.target.value }))} className={`w-full bg-sky-500/10 ${t.textPrimary} border border-sky-500/50 rounded-lg px-3 py-2 text-sm focus:border-sky-500 focus:outline-none`} disabled />
+              </div>
+
+              <div>
+                <label className={`block text-[11px] font-bold ${t.textSecondary} uppercase tracking-wider mb-1`}>Onda</label>
+                <input type="text" value={ftForm.id_ondafab} onChange={e => setFtForm(prev => ({ ...prev, id_ondafab: e.target.value }))} className={`w-full ${t.inner} ${t.textPrimary} border ${t.border} rounded-lg px-3 py-2 text-sm focus:border-sky-500 focus:outline-none`} disabled />
+              </div>
+
+              <div>
+                <label className={`block text-[11px] font-bold ${t.textSecondary} uppercase tracking-wider mb-1`}>Qualidade</label>
+                <input type="text" value={ftForm.id_qualidfab} onChange={e => setFtForm(prev => ({ ...prev, id_qualidfab: e.target.value }))} className={`w-full ${t.inner} ${t.textPrimary} border ${t.border} rounded-lg px-3 py-2 text-sm focus:border-sky-500 focus:outline-none`} disabled />
+              </div>
+
+              <div>
+                <label className={`block text-[11px] font-bold ${t.textSecondary} uppercase tracking-wider mb-1`}>Gramatura</label>
+                <input type="text" value={ftForm.gramatura} onChange={e => setFtForm(prev => ({ ...prev, gramatura: e.target.value }))} className={`w-full ${t.inner} ${t.textPrimary} border ${t.border} rounded-lg px-3 py-2 text-sm focus:border-sky-500 focus:outline-none`} disabled />
+              </div>
+
+              <div>
+                <label className={`block text-[11px] font-bold text-[#5DD62C] uppercase tracking-wider mb-1`}>Quantidade a Inserir</label>
+                <input type="number" autoFocus={!!ftForm.referencia} value={ftForm.quantidade} onChange={e => setFtForm(prev => ({ ...prev, quantidade: e.target.value }))} className={`w-full ${t.inner} ${t.textPrimary} border border-[#5DD62C] rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-[#5DD62C] transition-all`} placeholder="Ex: 500" />
+              </div>
+            </div>
+
+            <div className="flex justify-end gap-3 mt-6 pt-4 border-t border-gray-700">
+              <button onClick={() => setModalEstoqueAberto(false)} className={`px-4 py-2 rounded-lg text-xs font-bold ${t.textSecondary} hover:${t.textPrimary} border ${t.border} transition-colors`}>Cancelar</button>
+              <button onClick={handleSalvarEstoqueManual} disabled={!ftForm.quantidade} className={`px-6 py-2 rounded-lg text-xs font-bold bg-[#5DD62C] text-[#0F0F0F] hover:bg-[#337418] hover:text-[#F8F8F8] shadow-md transition-all ${!ftForm.quantidade ? 'opacity-50 cursor-not-allowed' : ''}`}>Salvar Estoque</button>
             </div>
           </div>
         </div>
@@ -826,11 +963,12 @@ function App() {
         <button onClick={() => alterarAba('prazos')} className={`pb-3 px-4 font-medium text-sm transition-colors relative whitespace-nowrap ${abaAtiva === 'prazos' ? `${t.textAccent} border-b-2 ${t.borderAccent}` : `${t.textSecondary} hover:${t.textPrimary}`}`}>Pedidos</button>
         <button onClick={() => alterarAba('orcamentos')} className={`pb-3 px-4 font-medium text-sm transition-colors relative whitespace-nowrap ${abaAtiva === 'orcamentos' ? `${t.textAccent} border-b-2 ${t.borderAccent}` : `${t.textSecondary} hover:${t.textPrimary}`}`}>Orçamentos</button>
         <button onClick={() => alterarAba('compras')} className={`pb-3 px-4 font-medium text-sm transition-colors relative whitespace-nowrap ${abaAtiva === 'compras' ? `${t.textAccent} border-b-2 ${t.borderAccent}` : `${t.textSecondary} hover:${t.textPrimary}`}`}>Compras</button>
+        <button onClick={() => alterarAba('estoque')} className={`pb-3 px-4 font-medium text-sm transition-colors relative whitespace-nowrap ${abaAtiva === 'estoque' ? `${t.textAccent} border-b-2 ${t.borderAccent}` : `${t.textSecondary} hover:${t.textPrimary}`}`}>Estoque de Caixas</button>
         <button onClick={() => alterarAba('dashboard')} className={`pb-3 px-4 font-medium text-sm transition-colors relative whitespace-nowrap ${abaAtiva === 'dashboard' ? `${t.textAccent} border-b-2 ${t.borderAccent}` : `${t.textSecondary} hover:${t.textPrimary}`}`}>Dashboard</button>
       </div>
 
       <main className="w-full mx-auto relative z-0">
-        
+
         {/* ABA MAPA E GERAL */}
         {abaAtiva === 'mapa' && (
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start w-full">
@@ -853,19 +991,19 @@ function App() {
               <div className={`${t.card} rounded-2xl shadow-md overflow-hidden w-full border ${t.border}`}>
                 <div className={`p-4 md:p-5 border-b ${t.border} flex flex-col md:flex-row justify-between items-start md:items-center gap-3 ${t.card}`}>
                   <div className="flex items-center gap-3">
-                     <h2 className={`text-lg font-bold ${t.textPrimary}`}>Pedidos Prontos para Expedição</h2>
-                     <span className={`${t.bgAccentSoft} ${t.textAccent} text-xs px-3 py-1.5 rounded-full font-bold border ${t.borderAccentSoft}`}>
-                       {pedidosProntosParaMapa.length} Prontos
-                     </span>
+                    <h2 className={`text-lg font-bold ${t.textPrimary}`}>Pedidos Prontos para Expedição</h2>
+                    <span className={`${t.bgAccentSoft} ${t.textAccent} text-xs px-3 py-1.5 rounded-full font-bold border ${t.borderAccentSoft}`}>
+                      {pedidosProntosParaMapa.length} Prontos
+                    </span>
                   </div>
                   {pedidosSelecionados.length > 0 && (
-                    <button 
+                    <button
                       onClick={() => {
                         iniciarAtualizacao();
                         axios.put(`${API_URL}/api/pedidos/status-lote`, { ids: pedidosSelecionados, status: 'Faturada' })
                           .then(() => { finalizarAtualizacao(); setPedidosSelecionados([]); carregarPedidos(true); carregarResumos(); })
                           .catch(() => { finalizarAtualizacao(); })
-                      }} 
+                      }}
                       className="bg-[#5DD62C] hover:bg-[#337418] text-[#0F0F0F] hover:text-[#F8F8F8] text-[11px] px-3 py-1.5 rounded font-bold shadow transition-all flex items-center gap-1"
                     >
                       <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7" /></svg>
@@ -873,7 +1011,7 @@ function App() {
                     </button>
                   )}
                 </div>
-                
+
                 <div className="overflow-x-auto w-full scrollbar-hide">
                   <table className="w-full text-left border-collapse min-w-[600px]">
                     <thead>
@@ -934,7 +1072,7 @@ function App() {
                     <RedimensionarMapa />
                     <TileLayer url={isDarkMode ? "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png" : "https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png"} />
                     <Marker position={COORDENADAS_EMPRESA}>
-                      <Popup><div className="text-gray-900 p-1"><strong className="text-[#337418]">Minha Empresa</strong><br/><span className="text-xs text-gray-600">Partida</span></div></Popup>
+                      <Popup><div className="text-gray-900 p-1"><strong className="text-[#337418]">Minha Empresa</strong><br /><span className="text-xs text-gray-600">Partida</span></div></Popup>
                     </Marker>
                     {pedidosProntosParaMapa.map((pedido) => {
                       return pedido.latitude && (
@@ -979,123 +1117,123 @@ function App() {
 
         {/* ABA PRODUÇÃO (3x3) */}
         {abaAtiva === 'producao' && (() => {
-          const ofsEmProducao = pedidos.flatMap(p => 
+          const ofsEmProducao = pedidos.flatMap(p =>
             p.itens.filter(i => i.statusOF === 'Produção').map(i => ({ ...i, pedido: p }))
           ).sort((a, b) => new Date(b.data_producao || 0) - new Date(a.data_producao || 0));
 
           const ofsEmProducaoFiltradas = ofsEmProducao.filter(of => {
-             const termo = termoPesquisaProducao.toLowerCase();
-             if (!termo) return true;
-             return String(of.id_numof || '').toLowerCase().includes(termo) ||
-                    String(of.pedido.id_pedido || '').toLowerCase().includes(termo) ||
-                    String(of.pedido.cliente || '').toLowerCase().includes(termo) ||
-                    String(of.referencia || '').toLowerCase().includes(termo);
+            const termo = termoPesquisaProducao.toLowerCase();
+            if (!termo) return true;
+            return String(of.id_numof || '').toLowerCase().includes(termo) ||
+              String(of.pedido.id_pedido || '').toLowerCase().includes(termo) ||
+              String(of.pedido.cliente || '').toLowerCase().includes(termo) ||
+              String(of.referencia || '').toLowerCase().includes(termo);
           });
 
           return (
             <div className="space-y-6 w-full relative z-0">
-               <div className={`flex flex-col md:flex-row justify-between items-start md:items-center mb-6 gap-4 border-b ${t.border} pb-5`}>
-                  <div>
-                    <h2 className={`text-2xl font-bold ${t.textPrimary}`}>Painel de Controle de Produção</h2>
-                  </div>
-                  <div className="flex flex-col sm:flex-row items-center gap-3 w-full md:w-auto">
-                    <div className="relative w-full sm:w-64 flex-shrink-0">
-                      <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                        <svg className={`w-4 h-4 ${t.textSecondary}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" /></svg>
-                      </div>
-                      <input type="text" value={termoPesquisaProducao} onChange={(e) => setTermoPesquisaProducao(e.target.value)} placeholder="Buscar OF, Pedido ou Cliente..." className={`w-full pl-9 pr-3 py-3 md:py-2 bg-transparent border ${t.border} rounded-lg text-xs md:text-sm ${t.textPrimary} focus:outline-none focus:border-purple-500`} />
+              <div className={`flex flex-col md:flex-row justify-between items-start md:items-center mb-6 gap-4 border-b ${t.border} pb-5`}>
+                <div>
+                  <h2 className={`text-2xl font-bold ${t.textPrimary}`}>Painel de Controle de Produção</h2>
+                </div>
+                <div className="flex flex-col sm:flex-row items-center gap-3 w-full md:w-auto">
+                  <div className="relative w-full sm:w-64 flex-shrink-0">
+                    <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                      <svg className={`w-4 h-4 ${t.textSecondary}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" /></svg>
                     </div>
-                    <div className={`${t.bgAccentSoft} ${t.textAccent} font-mono px-5 py-2.5 rounded-xl text-lg font-bold border ${t.borderAccentSoft} whitespace-nowrap`}>
-                      {ofsEmProducaoFiltradas.length} OFs em Produção
-                    </div>
+                    <input type="text" value={termoPesquisaProducao} onChange={(e) => setTermoPesquisaProducao(e.target.value)} placeholder="Buscar OF, Pedido ou Cliente..." className={`w-full pl-9 pr-3 py-3 md:py-2 bg-transparent border ${t.border} rounded-lg text-xs md:text-sm ${t.textPrimary} focus:outline-none focus:border-purple-500`} />
                   </div>
-               </div>
-               
-               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
-                  {ofsEmProducaoFiltradas.map((of, idx) => {
-                     const { texto: textoDias, dias } = calcularTempoProducao(of.data_producao);
-                     const corTag = dias >= 5 ? 'text-red-400 bg-red-500/10 border-red-500/20' : 
-                                    dias >= 3 ? 'text-amber-400 bg-amber-500/10 border-amber-500/20' : 
-                                    'text-sky-400 bg-sky-500/10 border-sky-500/20';
+                  <div className={`${t.bgAccentSoft} ${t.textAccent} font-mono px-5 py-2.5 rounded-xl text-lg font-bold border ${t.borderAccentSoft} whitespace-nowrap`}>
+                    {ofsEmProducaoFiltradas.length} OFs em Produção
+                  </div>
+                </div>
+              </div>
 
-                     return (
-                        <div key={`${of.id_numof}-${idx}`} className={`${t.card} rounded-2xl border ${t.border} p-5 flex flex-col justify-between shadow-lg transition-all hover:border-purple-500/40 hover:shadow-purple-500/5`}>
-                           <div className="flex justify-between items-start gap-4 mb-4">
-                              <div className="flex-1 min-w-0">
-                                 <div className="flex items-center gap-2 mb-2 flex-wrap">
-                                    <span className={`text-xs font-mono font-bold bg-purple-500/10 text-purple-400 px-2.5 py-0.5 rounded border border-purple-500/20`}>
-                                       OF {of.id_numof}
-                                    </span>
-                                    <span className={`text-[10px] font-mono font-bold ${t.inner} ${t.textSecondary} px-2 py-0.5 rounded border ${t.border}`}>
-                                       PED {of.pedido.id_pedido}
-                                    </span>
-                                 </div>
-                                 <h3 className={`font-bold ${t.textPrimary} text-lg leading-tight truncate`} title={of.pedido.cliente}>{of.pedido.cliente}</h3>
-                                 <p className={`text-[12px] ${t.textPrimary} mt-1.5 font-medium truncate`} title={of.referencia}>{of.referencia}</p>
-                              </div>
-                           </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
+                {ofsEmProducaoFiltradas.map((of, idx) => {
+                  const { texto: textoDias, dias } = calcularTempoProducao(of.data_producao);
+                  const corTag = dias >= 5 ? 'text-red-400 bg-red-500/10 border-red-500/20' :
+                    dias >= 3 ? 'text-amber-400 bg-amber-500/10 border-amber-500/20' :
+                      'text-sky-400 bg-sky-500/10 border-sky-500/20';
 
-                           <div className="mb-4">
-                              <span className={`text-[10px] font-bold uppercase tracking-wider px-2.5 py-1 rounded border ${corTag} inline-block w-full text-center`}>
-                                 {textoDias}
-                              </span>
-                           </div>
-
-                           <div className={`grid grid-cols-2 gap-y-4 gap-x-2 py-4 border-y ${t.border} mb-4`}>
-                              <div>
-                                 <span className={`block text-[10px] ${t.textSecondary} uppercase tracking-wider mb-1`}>Qtd OF / Peso</span>
-                                 <span className={`font-mono font-bold ${t.textPrimary} text-sm`}>{Number(of.qtd_prog).toLocaleString('pt-BR')} <span className="text-[10px] font-sans font-normal">cx</span></span>
-                                 <div className={`font-mono font-bold ${t.textAccent} text-xs`}>{formatarKg(of.peso_restante)} kg</div>
-                              </div>
-                              <div>
-                                 <span className={`block text-[10px] ${t.textSecondary} uppercase tracking-wider mb-1`}>Qualidade</span>
-                                 <span className={`font-mono font-bold ${t.textPrimary} block truncate text-sm`} title={`${of.onda || '-'} / ${of.qualidade || '-'}`}>{of.onda || '-'} / {of.qualidade || '-'}</span>
-                                 <div className={`text-xs ${t.textSecondary} font-mono`}>{of.gramatura ? `${of.gramatura}g` : '-'}</div>
-                              </div>
-                              <div>
-                                 <span className={`block text-[10px] ${t.textSecondary} uppercase tracking-wider mb-1`}>Fechamento</span>
-                                 <span className={`font-mono font-bold ${t.textPrimary} block truncate text-sm`}>{of.fecha || 'N/A'}</span>
-                                 <div className={`text-xs ${t.textSecondary} font-mono`}>{of.comp || 0}x{of.larg || 0}x{of.alt || 0}</div>
-                              </div>
-                              <div>
-                                 <span className={`block text-[10px] ${t.textSecondary} uppercase tracking-wider mb-1`}>Impressão</span>
-                                 {(!of.cor1 && !of.cor2) ? (
-                                    <span className={`font-mono font-bold ${t.textSecondary} block text-sm`}>Sem Impr.</span>
-                                 ) : (
-                                    <>
-                                       <span className={`font-mono font-bold ${t.textPrimary} block truncate text-xs`} title={of.cor1}>{of.cor1 || '-'}</span>
-                                       {of.cor2 && <span className={`font-mono font-bold ${t.textPrimary} block truncate text-xs`} title={of.cor2}>{of.cor2}</span>}
-                                    </>
-                                 )}
-                              </div>
-                           </div>
-
-                           <div className="flex gap-2 justify-end mt-auto">
-                              <button 
-                                 onClick={() => alternarStatusOf(of.pedido.id, of.id_numof, 'Pendente')} 
-                                 className={`px-3 py-2.5 rounded-lg text-[10px] font-bold border transition-all bg-amber-500/10 text-amber-500 border-amber-500/20 hover:bg-amber-500/20`}
-                                 title="Voltar para Pendente"
-                              >
-                                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10 19l-7-7m0 0l7-7m-7 7h18" /></svg>
-                              </button>
-                              <button 
-                                 onClick={() => alternarStatusOf(of.pedido.id, of.id_numof, 'Pronto')} 
-                                 className={`flex-1 px-4 py-2.5 rounded-lg text-xs font-bold border transition-all bg-[#5DD62C] text-[#0F0F0F] border-[#5DD62C] hover:bg-[#337418] hover:border-[#337418] hover:text-[#F8F8F8] flex justify-center gap-2 items-center`}
-                              >
-                                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7" /></svg> Marcar Pronto
-                              </button>
-                           </div>
+                  return (
+                    <div key={`${of.id_numof}-${idx}`} className={`${t.card} rounded-2xl border ${t.border} p-5 flex flex-col justify-between shadow-lg transition-all hover:border-purple-500/40 hover:shadow-purple-500/5`}>
+                      <div className="flex justify-between items-start gap-4 mb-4">
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2 mb-2 flex-wrap">
+                            <span className={`text-xs font-mono font-bold bg-purple-500/10 text-purple-400 px-2.5 py-0.5 rounded border border-purple-500/20`}>
+                              OF {of.id_numof}
+                            </span>
+                            <span className={`text-[10px] font-mono font-bold ${t.inner} ${t.textSecondary} px-2 py-0.5 rounded border ${t.border}`}>
+                              PED {of.pedido.id_pedido}
+                            </span>
+                          </div>
+                          <h3 className={`font-bold ${t.textPrimary} text-lg leading-tight truncate`} title={of.pedido.cliente}>{of.pedido.cliente}</h3>
+                          <p className={`text-[12px] ${t.textPrimary} mt-1.5 font-medium truncate`} title={of.referencia}>{of.referencia}</p>
                         </div>
-                     )
-                  })}
-                  
-                  {ofsEmProducaoFiltradas.length === 0 && !carregando && (
-                    <div className={`col-span-full p-16 text-center ${t.textSecondary} ${t.inner} rounded-2xl border ${t.border}`}>
-                       <svg className="w-12 h-12 mx-auto mb-4 opacity-50" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
-                       <p className="text-lg">Nenhuma Ordem de Fabricação encontrada na produção no momento.</p>
+                      </div>
+
+                      <div className="mb-4">
+                        <span className={`text-[10px] font-bold uppercase tracking-wider px-2.5 py-1 rounded border ${corTag} inline-block w-full text-center`}>
+                          {textoDias}
+                        </span>
+                      </div>
+
+                      <div className={`grid grid-cols-2 gap-y-4 gap-x-2 py-4 border-y ${t.border} mb-4`}>
+                        <div>
+                          <span className={`block text-[10px] ${t.textSecondary} uppercase tracking-wider mb-1`}>Qtd OF / Peso</span>
+                          <span className={`font-mono font-bold ${t.textPrimary} text-sm`}>{Number(of.qtd_prog).toLocaleString('pt-BR')} <span className="text-[10px] font-sans font-normal">cx</span></span>
+                          <div className={`font-mono font-bold ${t.textAccent} text-xs`}>{formatarKg(of.peso_restante)} kg</div>
+                        </div>
+                        <div>
+                          <span className={`block text-[10px] ${t.textSecondary} uppercase tracking-wider mb-1`}>Qualidade</span>
+                          <span className={`font-mono font-bold ${t.textPrimary} block truncate text-sm`} title={`${of.onda || '-'} / ${of.qualidade || '-'}`}>{of.onda || '-'} / {of.qualidade || '-'}</span>
+                          <div className={`text-xs ${t.textSecondary} font-mono`}>{of.gramatura ? `${of.gramatura}g` : '-'}</div>
+                        </div>
+                        <div>
+                          <span className={`block text-[10px] ${t.textSecondary} uppercase tracking-wider mb-1`}>Fechamento</span>
+                          <span className={`font-mono font-bold ${t.textPrimary} block truncate text-sm`}>{of.fecha || 'N/A'}</span>
+                          <div className={`text-xs ${t.textSecondary} font-mono`}>{of.comp || 0}x{of.larg || 0}x{of.alt || 0}</div>
+                        </div>
+                        <div>
+                          <span className={`block text-[10px] ${t.textSecondary} uppercase tracking-wider mb-1`}>Impressão</span>
+                          {(!of.cor1 && !of.cor2) ? (
+                            <span className={`font-mono font-bold ${t.textSecondary} block text-sm`}>Sem Impr.</span>
+                          ) : (
+                            <>
+                              <span className={`font-mono font-bold ${t.textPrimary} block truncate text-xs`} title={of.cor1}>{of.cor1 || '-'}</span>
+                              {of.cor2 && <span className={`font-mono font-bold ${t.textPrimary} block truncate text-xs`} title={of.cor2}>{of.cor2}</span>}
+                            </>
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="flex gap-2 justify-end mt-auto">
+                        <button
+                          onClick={() => alternarStatusOf(of.pedido.id, of.id_numof, 'Pendente')}
+                          className={`px-3 py-2.5 rounded-lg text-[10px] font-bold border transition-all bg-amber-500/10 text-amber-500 border-amber-500/20 hover:bg-amber-500/20`}
+                          title="Voltar para Pendente"
+                        >
+                          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10 19l-7-7m0 0l7-7m-7 7h18" /></svg>
+                        </button>
+                        <button
+                          onClick={() => alternarStatusOf(of.pedido.id, of.id_numof, 'Pronto')}
+                          className={`flex-1 px-4 py-2.5 rounded-lg text-xs font-bold border transition-all bg-[#5DD62C] text-[#0F0F0F] border-[#5DD62C] hover:bg-[#337418] hover:border-[#337418] hover:text-[#F8F8F8] flex justify-center gap-2 items-center`}
+                        >
+                          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7" /></svg> Marcar Pronto
+                        </button>
+                      </div>
                     </div>
-                  )}
-               </div>
+                  )
+                })}
+
+                {ofsEmProducaoFiltradas.length === 0 && !carregando && (
+                  <div className={`col-span-full p-16 text-center ${t.textSecondary} ${t.inner} rounded-2xl border ${t.border}`}>
+                    <svg className="w-12 h-12 mx-auto mb-4 opacity-50" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+                    <p className="text-lg">Nenhuma Ordem de Fabricação encontrada na produção no momento.</p>
+                  </div>
+                )}
+              </div>
             </div>
           );
         })()}
@@ -1103,144 +1241,144 @@ function App() {
         {/* ABA ORÇAMENTOS */}
         {abaAtiva === 'orcamentos' && (
           <div className="space-y-6 w-full relative z-0">
-             <div className={`flex flex-col md:flex-row justify-between items-start md:items-center mb-6 gap-4 border-b ${t.border} pb-5`}>
-                <div>
-                  <h2 className={`text-xl font-bold ${t.textPrimary}`}>Gestão de Orçamentos</h2>
+            <div className={`flex flex-col md:flex-row justify-between items-start md:items-center mb-6 gap-4 border-b ${t.border} pb-5`}>
+              <div>
+                <h2 className={`text-xl font-bold ${t.textPrimary}`}>Gestão de Orçamentos</h2>
+              </div>
+
+              <div className={`flex flex-col xl:flex-row items-center gap-3 w-full xl:w-auto`}>
+                <div className="relative w-full xl:w-64 flex-shrink-0">
+                  <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none"><svg className={`w-4 h-4 ${t.textSecondary}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" /></svg></div>
+                  <input type="text" value={termoPesquisaOrcamento} onChange={(e) => setTermoPesquisaOrcamento(e.target.value)} placeholder="Buscar Nº, cliente ou contato..." className={`w-full pl-9 pr-3 py-3 md:py-2 bg-transparent border ${t.border} rounded-lg text-xs md:text-sm ${t.textPrimary} focus:outline-none focus:border-sky-500`} />
                 </div>
-                
-                <div className={`flex flex-col xl:flex-row items-center gap-3 w-full xl:w-auto`}>
-                  <div className="relative w-full xl:w-64 flex-shrink-0">
-                    <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none"><svg className={`w-4 h-4 ${t.textSecondary}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" /></svg></div>
-                    <input type="text" value={termoPesquisaOrcamento} onChange={(e) => setTermoPesquisaOrcamento(e.target.value)} placeholder="Buscar Nº, cliente ou contato..." className={`w-full pl-9 pr-3 py-3 md:py-2 bg-transparent border ${t.border} rounded-lg text-xs md:text-sm ${t.textPrimary} focus:outline-none focus:border-sky-500`} />
-                  </div>
-                  <button onClick={() => carregarOrcamentos(false)} className={`w-full xl:w-auto ${t.card} border ${t.border} ${t.textPrimary} hover:border-sky-500 hover:text-sky-500 px-4 py-3 md:py-2 rounded-lg text-xs font-semibold shadow-sm transition-all`}>
-                    Atualizar Tabela
-                  </button>
-                </div>
-             </div>
+                <button onClick={() => carregarOrcamentos(false)} className={`w-full xl:w-auto ${t.card} border ${t.border} ${t.textPrimary} hover:border-sky-500 hover:text-sky-500 px-4 py-3 md:py-2 rounded-lg text-xs font-semibold shadow-sm transition-all`}>
+                  Atualizar Tabela
+                </button>
+              </div>
+            </div>
 
-             <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-5">
-                {orcamentosFiltrados.map((orc) => {
-                   const estaExpandido = orcamentosExpandidos.includes(orc.id_orcamento);
-                   const isEditando = editandoNotaOrcamento === orc.id_orcamento;
-                   const { texto: textoDias, dias } = calcularTempoOrcamento(orc.raw_emissao);
-                   
-                   const corDias = dias > 15 ? 'text-red-400 bg-red-500/10 border-red-500/20' : 
-                                   dias > 7 ? 'text-amber-400 bg-amber-500/10 border-amber-500/20' : 
-                                   'text-[#5DD62C] bg-[#5DD62C]/10 border-[#5DD62C]/20';
+            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-5">
+              {orcamentosFiltrados.map((orc) => {
+                const estaExpandido = orcamentosExpandidos.includes(orc.id_orcamento);
+                const isEditando = editandoNotaOrcamento === orc.id_orcamento;
+                const { texto: textoDias, dias } = calcularTempoOrcamento(orc.raw_emissao);
 
-                   return (
-                      <div key={orc.id_orcamento} className={`${t.inner} rounded-2xl border ${t.border} overflow-hidden shadow-sm hover:border-sky-500/50 transition-all flex flex-col`}>
-                         <div className={`p-4 md:p-5 flex flex-col gap-4 border-b ${t.border}`}>
-                            <div className="flex justify-between items-start gap-2">
-                               <div>
-                                  <div className="flex items-center gap-2 mb-1.5 flex-wrap">
-                                     <span className={`text-xs font-mono font-bold bg-sky-500/10 text-sky-500 px-2 py-0.5 rounded border border-sky-500/20`}>ORC: {orc.id_orcamento}</span>
-                                     <span className={`text-[10px] font-mono font-bold ${corDias} px-2 py-0.5 rounded border`}>{textoDias}</span>
-                                  </div>
-                                  <h3 className={`font-bold ${t.textPrimary} text-base leading-tight mt-1 line-clamp-1`} title={orc.cliente}>{orc.cliente}</h3>
-                               </div>
-                            </div>
-                            
-                            <div className={`grid grid-cols-2 gap-3 text-xs ${t.textSecondary}`}>
-                               <div>
-                                  <span className="block text-[10px] uppercase mb-0.5">Contato Comercial</span>
-                                  <span className={`font-medium ${t.textPrimary} truncate block`} title={orc.comprador}>{orc.comprador || 'Não Informado'}</span>
-                                  <span className="font-mono mt-0.5 block">{orc.telefone || 'Sem telefone'}</span>
-                               </div>
-                               <div>
-                                  <span className="block text-[10px] uppercase mb-0.5">Valor Total</span>
-                                  <span className={`font-mono font-bold ${t.textPrimary} text-sm`}>R$ {(orc.total_geral || 0).toLocaleString('pt-BR', {minimumFractionDigits: 2})}</span>
-                                  <span className="font-mono mt-0.5 block">{formatarKg(orc.total_peso)} kg</span>
-                               </div>
-                            </div>
-                            
-                            <div className={`flex gap-3 text-[10px] uppercase font-bold tracking-wider pt-3 border-t ${t.border} ${t.textSecondary}`}>
-                               <div className="flex-1 truncate"><span className="opacity-70">Pagto:</span> <span className={t.textPrimary}>{orc.cond_pagto || 'N/A'}</span></div>
-                               <div className="flex-1 text-right truncate"><span className="opacity-70">Prazo:</span> <span className={t.textPrimary}>{orc.prazo_entrega || 'N/A'}</span></div>
-                            </div>
-                         </div>
+                const corDias = dias > 15 ? 'text-red-400 bg-red-500/10 border-red-500/20' :
+                  dias > 7 ? 'text-amber-400 bg-amber-500/10 border-amber-500/20' :
+                    'text-[#5DD62C] bg-[#5DD62C]/10 border-[#5DD62C]/20';
 
-                         {/* BLOCO DE FOLLOW UP (SQLITE) */}
-                         <div className={`p-4 ${t.card}`}>
-                            <div className="flex justify-between items-center mb-2">
-                               <h4 className={`text-[11px] font-bold ${t.textSecondary} uppercase tracking-wider flex items-center gap-1.5`}>
-                                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" /></svg> Histórico / Notas
-                               </h4>
-                               {orc.data_anotacao && !isEditando && (
-                                  <span className={`text-[9px] font-mono ${t.textSecondary}`}>Atualizado em: {orc.data_anotacao}</span>
-                               )}
-                            </div>
-                            
-                            {isEditando ? (
-                               <div className="space-y-2">
-                                  <textarea 
-                                     autoFocus
-                                     value={textoNotaTemp} 
-                                     onChange={(e) => setTextoNotaTemp(e.target.value)}
-                                     placeholder="Digite as anotações da negociação aqui..."
-                                     className={`w-full ${t.inner} ${t.textPrimary} border ${t.border} rounded-lg px-3 py-2 text-xs focus:outline-none focus:border-sky-500 resize-none h-20 transition-all`}
-                                  />
-                                  <div className="flex gap-2 justify-end">
-                                     <button onClick={() => setEditandoNotaOrcamento(null)} className={`px-3 py-1.5 rounded-md text-[10px] font-bold ${t.textSecondary} hover:${t.textPrimary} border ${t.border} transition-colors`}>Cancelar</button>
-                                     <button onClick={() => salvarNotaOrcamento(orc.id_orcamento)} className="px-4 py-1.5 rounded-md text-[10px] font-bold bg-sky-500 hover:bg-sky-600 text-white shadow-sm transition-colors">Salvar Nota</button>
-                                  </div>
-                               </div>
-                            ) : (
-                               <div 
-                                  onClick={() => { setTextoNotaTemp(orc.anotacao || ""); setEditandoNotaOrcamento(orc.id_orcamento); }}
-                                  className={`w-full ${t.inner} border ${t.border} border-dashed rounded-lg p-3 text-xs ${orc.anotacao ? t.textPrimary : `${t.textSecondary} italic`} cursor-pointer hover:border-sky-500/50 transition-colors min-h-[60px] whitespace-pre-wrap`}
-                               >
-                                  {orc.anotacao || "Clique para adicionar uma anotação sobre esta negociação..."}
-                               </div>
-                            )}
-                         </div>
-
-                         <div className="mt-auto">
-                            <button onClick={() => toggleExpandirOrcamento(orc.id_orcamento)} className={`w-full py-2.5 px-3 border-t ${t.border} text-[11px] font-bold ${t.textSecondary} hover:${t.textPrimary} flex items-center justify-center gap-1.5 transition-colors ${t.hoverCard}`}>
-                               <span>{estaExpandido ? 'Ocultar Itens' : `Ver Itens (${orc.itens.length})`}</span>
-                               <svg className={`w-3.5 h-3.5 transition-transform duration-200 ${estaExpandido ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7" /></svg>
-                            </button>
-
-                            {estaExpandido && (
-                               <div className={`${t.innerAlt} border-t ${t.border} text-[11px] max-h-48 overflow-y-auto divide-y ${t.divider}`}>
-                                  {orc.itens.map((item, idx) => (
-                                     <div key={idx} className="p-3">
-                                        <div className="flex justify-between items-start mb-1">
-                                           <strong className={`${t.textPrimary} flex-1 pr-2`}>{item.referencia || item.modelo}</strong>
-                                           <span className={`font-mono font-bold ${item.aprovado === 'S' ? 'text-[#5DD62C]' : t.textSecondary}`}>
-                                              {item.aprovado === 'S' ? 'APROVADO' : ''}
-                                           </span>
-                                        </div>
-                                        <div className={`flex justify-between text-[10px] ${t.textSecondary} font-mono mt-1.5`}>
-                                           <span>Qtd: {item.quantidade} cx</span>
-                                           <span>R$ {item.vl_unit.toLocaleString('pt-BR', {minimumFractionDigits:4})} /un</span>
-                                        </div>
-                                        <div className={`flex justify-between text-[10px] ${t.textSecondary} font-mono mt-0.5`}>
-                                           <span>{item.onda} / {item.qualidade}</span>
-                                           <span>{item.comp}x{item.larg}x{item.alt}</span>
-                                        </div>
-                                     </div>
-                                  ))}
-                               </div>
-                            )}
-                         </div>
+                return (
+                  <div key={orc.id_orcamento} className={`${t.inner} rounded-2xl border ${t.border} overflow-hidden shadow-sm hover:border-sky-500/50 transition-all flex flex-col`}>
+                    <div className={`p-4 md:p-5 flex flex-col gap-4 border-b ${t.border}`}>
+                      <div className="flex justify-between items-start gap-2">
+                        <div>
+                          <div className="flex items-center gap-2 mb-1.5 flex-wrap">
+                            <span className={`text-xs font-mono font-bold bg-sky-500/10 text-sky-500 px-2 py-0.5 rounded border border-sky-500/20`}>ORC: {orc.id_orcamento}</span>
+                            <span className={`text-[10px] font-mono font-bold ${corDias} px-2 py-0.5 rounded border`}>{textoDias}</span>
+                          </div>
+                          <h3 className={`font-bold ${t.textPrimary} text-base leading-tight mt-1 line-clamp-1`} title={orc.cliente}>{orc.cliente}</h3>
+                        </div>
                       </div>
-                   )
-                })}
 
-                {orcamentosFiltrados.length === 0 && !carregando && (
-                  <div className={`col-span-full p-12 text-center ${t.textSecondary} ${t.inner} rounded-2xl border ${t.border}`}>Nenhum orçamento encontrado.</div>
-                )}
-             </div>
-             
-             {orcamentos.length > limiteExibicao && (
-                <div className="flex justify-center mt-6">
-                   <button onClick={() => setLimiteExibicao(prev => prev + 20)} className={`px-6 py-3 rounded-xl text-sm font-bold shadow-md transition-all bg-sky-500 hover:bg-sky-600 text-white w-full md:w-auto hover:scale-105`}>
-                      Carregar Mais Orçamentos
-                   </button>
-                </div>
-             )}
+                      <div className={`grid grid-cols-2 gap-3 text-xs ${t.textSecondary}`}>
+                        <div>
+                          <span className="block text-[10px] uppercase mb-0.5">Contato Comercial</span>
+                          <span className={`font-medium ${t.textPrimary} truncate block`} title={orc.comprador}>{orc.comprador || 'Não Informado'}</span>
+                          <span className="font-mono mt-0.5 block">{orc.telefone || 'Sem telefone'}</span>
+                        </div>
+                        <div>
+                          <span className="block text-[10px] uppercase mb-0.5">Valor Total</span>
+                          <span className={`font-mono font-bold ${t.textPrimary} text-sm`}>R$ {(orc.total_geral || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</span>
+                          <span className="font-mono mt-0.5 block">{formatarKg(orc.total_peso)} kg</span>
+                        </div>
+                      </div>
+
+                      <div className={`flex gap-3 text-[10px] uppercase font-bold tracking-wider pt-3 border-t ${t.border} ${t.textSecondary}`}>
+                        <div className="flex-1 truncate"><span className="opacity-70">Pagto:</span> <span className={t.textPrimary}>{orc.cond_pagto || 'N/A'}</span></div>
+                        <div className="flex-1 text-right truncate"><span className="opacity-70">Prazo:</span> <span className={t.textPrimary}>{orc.prazo_entrega || 'N/A'}</span></div>
+                      </div>
+                    </div>
+
+                    {/* BLOCO DE FOLLOW UP (SQLITE) */}
+                    <div className={`p-4 ${t.card}`}>
+                      <div className="flex justify-between items-center mb-2">
+                        <h4 className={`text-[11px] font-bold ${t.textSecondary} uppercase tracking-wider flex items-center gap-1.5`}>
+                          <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" /></svg> Histórico / Notas
+                        </h4>
+                        {orc.data_anotacao && !isEditando && (
+                          <span className={`text-[9px] font-mono ${t.textSecondary}`}>Atualizado em: {orc.data_anotacao}</span>
+                        )}
+                      </div>
+
+                      {isEditando ? (
+                        <div className="space-y-2">
+                          <textarea
+                            autoFocus
+                            value={textoNotaTemp}
+                            onChange={(e) => setTextoNotaTemp(e.target.value)}
+                            placeholder="Digite as anotações da negociação aqui..."
+                            className={`w-full ${t.inner} ${t.textPrimary} border ${t.border} rounded-lg px-3 py-2 text-xs focus:outline-none focus:border-sky-500 resize-none h-20 transition-all`}
+                          />
+                          <div className="flex gap-2 justify-end">
+                            <button onClick={() => setEditandoNotaOrcamento(null)} className={`px-3 py-1.5 rounded-md text-[10px] font-bold ${t.textSecondary} hover:${t.textPrimary} border ${t.border} transition-colors`}>Cancelar</button>
+                            <button onClick={() => salvarNotaOrcamento(orc.id_orcamento)} className="px-4 py-1.5 rounded-md text-[10px] font-bold bg-sky-500 hover:bg-sky-600 text-white shadow-sm transition-colors">Salvar Nota</button>
+                          </div>
+                        </div>
+                      ) : (
+                        <div
+                          onClick={() => { setTextoNotaTemp(orc.anotacao || ""); setEditandoNotaOrcamento(orc.id_orcamento); }}
+                          className={`w-full ${t.inner} border ${t.border} border-dashed rounded-lg p-3 text-xs ${orc.anotacao ? t.textPrimary : `${t.textSecondary} italic`} cursor-pointer hover:border-sky-500/50 transition-colors min-h-[60px] whitespace-pre-wrap`}
+                        >
+                          {orc.anotacao || "Clique para adicionar uma anotação sobre esta negociação..."}
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="mt-auto">
+                      <button onClick={() => toggleExpandirOrcamento(orc.id_orcamento)} className={`w-full py-2.5 px-3 border-t ${t.border} text-[11px] font-bold ${t.textSecondary} hover:${t.textPrimary} flex items-center justify-center gap-1.5 transition-colors ${t.hoverCard}`}>
+                        <span>{estaExpandido ? 'Ocultar Itens' : `Ver Itens (${orc.itens.length})`}</span>
+                        <svg className={`w-3.5 h-3.5 transition-transform duration-200 ${estaExpandido ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7" /></svg>
+                      </button>
+
+                      {estaExpandido && (
+                        <div className={`${t.innerAlt} border-t ${t.border} text-[11px] max-h-48 overflow-y-auto divide-y ${t.divider}`}>
+                          {orc.itens.map((item, idx) => (
+                            <div key={idx} className="p-3">
+                              <div className="flex justify-between items-start mb-1">
+                                <strong className={`${t.textPrimary} flex-1 pr-2`}>{item.referencia || item.modelo}</strong>
+                                <span className={`font-mono font-bold ${item.aprovado === 'S' ? 'text-[#5DD62C]' : t.textSecondary}`}>
+                                  {item.aprovado === 'S' ? 'APROVADO' : ''}
+                                </span>
+                              </div>
+                              <div className={`flex justify-between text-[10px] ${t.textSecondary} font-mono mt-1.5`}>
+                                <span>Qtd: {item.quantidade} cx</span>
+                                <span>R$ {item.vl_unit.toLocaleString('pt-BR', { minimumFractionDigits: 4 })} /un</span>
+                              </div>
+                              <div className={`flex justify-between text-[10px] ${t.textSecondary} font-mono mt-0.5`}>
+                                <span>{item.onda} / {item.qualidade}</span>
+                                <span>{item.comp}x{item.larg}x{item.alt}</span>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )
+              })}
+
+              {orcamentosFiltrados.length === 0 && !carregando && (
+                <div className={`col-span-full p-12 text-center ${t.textSecondary} ${t.inner} rounded-2xl border ${t.border}`}>Nenhum orçamento encontrado.</div>
+              )}
+            </div>
+
+            {orcamentos.length > limiteExibicao && (
+              <div className="flex justify-center mt-6">
+                <button onClick={() => setLimiteExibicao(prev => prev + 20)} className={`px-6 py-3 rounded-xl text-sm font-bold shadow-md transition-all bg-sky-500 hover:bg-sky-600 text-white w-full md:w-auto hover:scale-105`}>
+                  Carregar Mais Orçamentos
+                </button>
+              </div>
+            )}
           </div>
         )}
 
@@ -1251,293 +1389,293 @@ function App() {
           const ativosAtual = pedidosAbaControle.length;
 
           return (
-          <div className="space-y-6 sm:space-y-8 w-full relative z-0">
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 md:gap-5">
-              <div className={`${t.card} p-5 md:p-6 rounded-2xl shadow-md flex flex-col justify-center transition-all duration-300`}>
-                <p className={`text-[12px] sm:text-[13px] font-medium ${t.textSecondary} mb-1.5`}>Faturamento em Aberto</p>
-                <p className={`text-2xl md:text-3xl font-bold ${t.textPrimary}`}>R$ {(faturamentoAtual || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</p>
+            <div className="space-y-6 sm:space-y-8 w-full relative z-0">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 md:gap-5">
+                <div className={`${t.card} p-5 md:p-6 rounded-2xl shadow-md flex flex-col justify-center transition-all duration-300`}>
+                  <p className={`text-[12px] sm:text-[13px] font-medium ${t.textSecondary} mb-1.5`}>Faturamento em Aberto</p>
+                  <p className={`text-2xl md:text-3xl font-bold ${t.textPrimary}`}>R$ {(faturamentoAtual || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</p>
+                </div>
+
+                <div className={`${t.card} p-5 md:p-6 rounded-2xl shadow-md flex flex-col justify-center relative transition-all duration-300`}>
+                  <div className="flex justify-between items-center mb-1.5">
+                    <p className={`text-[12px] sm:text-[13px] font-medium ${t.textSecondary}`}>Peso em Aberto</p>
+
+                    <div className={`flex bg-[#151515] rounded-md border ${t.border} p-0.5 ml-2`}>
+                      <button
+                        onClick={() => setModoPesoAberto('mes')}
+                        disabled={filtroStatusPedido === 'faturado'}
+                        className={`px-2 py-0.5 text-[10px] font-bold rounded-sm transition-all ${filtroStatusPedido === 'faturado' ? 'opacity-30 cursor-not-allowed' : (modoPesoAberto === 'mes' ? 'bg-[#337418] text-white shadow-sm' : 'text-gray-500 hover:text-gray-300')}`}
+                      >Mês</button>
+                      <button
+                        onClick={() => setModoPesoAberto('total')}
+                        disabled={filtroStatusPedido === 'faturado'}
+                        className={`px-2 py-0.5 text-[10px] font-bold rounded-sm transition-all ${filtroStatusPedido === 'faturado' ? 'opacity-30 cursor-not-allowed' : (modoPesoAberto === 'total' ? 'bg-[#337418] text-white shadow-sm' : 'text-gray-500 hover:text-gray-300')}`}
+                      >Total</button>
+                    </div>
+                  </div>
+                  <p className={`text-2xl md:text-3xl font-bold ${t.textPrimary}`}>
+                    {formatarKg(pesoAtual)} <span className={`text-sm md:text-base font-medium ${t.textAccent} ml-1`}>kg</span>
+                  </p>
+                </div>
+
+                <div className={`${t.card} p-5 md:p-6 rounded-2xl shadow-md flex flex-col justify-center transition-all duration-300`}>
+                  <p className={`text-[12px] sm:text-[13px] font-medium ${t.textSecondary} mb-1.5`}>Pedidos Ativos</p>
+                  <p className={`text-2xl md:text-3xl font-bold ${t.textPrimary}`}>{ativosAtual || 0}</p>
+                </div>
               </div>
-              
-              <div className={`${t.card} p-5 md:p-6 rounded-2xl shadow-md flex flex-col justify-center relative transition-all duration-300`}>
-                <div className="flex justify-between items-center mb-1.5">
-                  <p className={`text-[12px] sm:text-[13px] font-medium ${t.textSecondary}`}>Peso em Aberto</p>
-                  
-                  <div className={`flex bg-[#151515] rounded-md border ${t.border} p-0.5 ml-2`}>
-                    <button 
-                      onClick={() => setModoPesoAberto('mes')} 
-                      disabled={filtroStatusPedido === 'faturado'}
-                      className={`px-2 py-0.5 text-[10px] font-bold rounded-sm transition-all ${filtroStatusPedido === 'faturado' ? 'opacity-30 cursor-not-allowed' : (modoPesoAberto === 'mes' ? 'bg-[#337418] text-white shadow-sm' : 'text-gray-500 hover:text-gray-300')}`}
-                    >Mês</button>
-                    <button 
-                      onClick={() => setModoPesoAberto('total')} 
-                      disabled={filtroStatusPedido === 'faturado'}
-                      className={`px-2 py-0.5 text-[10px] font-bold rounded-sm transition-all ${filtroStatusPedido === 'faturado' ? 'opacity-30 cursor-not-allowed' : (modoPesoAberto === 'total' ? 'bg-[#337418] text-white shadow-sm' : 'text-gray-500 hover:text-gray-300')}`}
-                    >Total</button>
+
+              <div className={`${t.card} rounded-2xl shadow-md p-4 md:p-6 w-full border ${t.border}`}>
+                <div className={`flex flex-col lg:flex-row justify-between items-start lg:items-center mb-6 gap-4 border-b ${t.border} pb-5`}>
+                  <div>
+                    <h2 className={`text-xl font-bold ${t.textPrimary}`}>Controle de Pedidos</h2>
+                  </div>
+
+                  <div className={`flex ${t.innerAlt} rounded-xl border ${t.border} p-1 w-full lg:w-auto`}>
+                    <button
+                      onClick={() => setFiltroStatusPedido('aberto')}
+                      className={`flex-1 lg:flex-none px-6 py-2 text-xs font-bold rounded-lg transition-all ${filtroStatusPedido === 'aberto' ? 'bg-[#337418] text-white shadow-md' : `text-gray-500 hover:${t.textPrimary}`}`}
+                    >Em Aberto</button>
+                    <button
+                      onClick={() => setFiltroStatusPedido('faturado')}
+                      className={`flex-1 lg:flex-none px-6 py-2 text-xs font-bold rounded-lg transition-all ${filtroStatusPedido === 'faturado' ? 'bg-[#337418] text-white shadow-md' : `text-gray-500 hover:${t.textPrimary}`}`}
+                    >Faturados</button>
                   </div>
                 </div>
-                <p className={`text-2xl md:text-3xl font-bold ${t.textPrimary}`}>
-                  {formatarKg(pesoAtual)} <span className={`text-sm md:text-base font-medium ${t.textAccent} ml-1`}>kg</span>
-                </p>
-              </div>
 
-              <div className={`${t.card} p-5 md:p-6 rounded-2xl shadow-md flex flex-col justify-center transition-all duration-300`}>
-                <p className={`text-[12px] sm:text-[13px] font-medium ${t.textSecondary} mb-1.5`}>Pedidos Ativos</p>
-                <p className={`text-2xl md:text-3xl font-bold ${t.textPrimary}`}>{ativosAtual || 0}</p>
-              </div>
-            </div>
+                <div className={`flex flex-col xl:flex-row items-center gap-3 w-full mb-6`}>
+                  <div className="relative w-full xl:w-64 flex-shrink-0">
+                    <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none"><svg className={`w-4 h-4 ${t.textSecondary}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" /></svg></div>
+                    <input type="text" value={termoPesquisa} onChange={(e) => setTermoPesquisa(e.target.value)} placeholder="Buscar pedido ou OF" className={`w-full pl-9 pr-3 py-3 md:py-2 bg-transparent border ${t.border} rounded-lg text-xs md:text-sm ${t.textPrimary} focus:outline-none focus:border-[#5DD62C]`} />
+                  </div>
 
-            <div className={`${t.card} rounded-2xl shadow-md p-4 md:p-6 w-full border ${t.border}`}>
-              <div className={`flex flex-col lg:flex-row justify-between items-start lg:items-center mb-6 gap-4 border-b ${t.border} pb-5`}>
-                <div>
-                  <h2 className={`text-xl font-bold ${t.textPrimary}`}>Controle de Pedidos</h2>
+                  <div className="flex flex-col sm:flex-row w-full xl:w-auto justify-between items-stretch sm:items-center gap-3 ml-auto">
+                    <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 w-full sm:w-auto">
+                      <select value={ordenarPor} onChange={(e) => setOrdenarPor(e.target.value)} className={`w-full sm:w-auto ${t.card} text-xs font-bold ${t.textPrimary} border ${t.border} rounded-lg px-3 py-3 md:py-2 focus:outline-none focus:${t.borderAccent} cursor-pointer`}>
+                        <option value="prazo">Dias Restantes</option><option value="id_pedido">Pedido</option><option value="emissao">Data Emissão</option>
+                      </select>
+                      <select value={ordem} onChange={(e) => setOrdem(e.target.value)} className={`w-full sm:w-auto ${t.card} text-xs font-bold ${t.textPrimary} border ${t.border} rounded-lg px-3 py-3 md:py-2 focus:outline-none focus:${t.borderAccent} cursor-pointer`}>
+                        <option value="asc">Crescente (A-Z)</option><option value="desc">Decrescente (Z-A)</option>
+                      </select>
+                    </div>
+                    <div className={`flex items-center justify-center ${t.card} p-1 rounded-lg border ${t.border} w-full sm:w-auto`}>
+                      <button onClick={() => setModoExibicao('lista')} className={`flex-1 sm:flex-none flex items-center justify-center gap-1.5 px-3 py-2 md:py-1.5 text-xs font-bold rounded-md transition-colors ${modoExibicao === 'lista' ? 'bg-[#337418] text-[#F8F8F8]' : `${t.textSecondary} hover:${t.textPrimary}`}`}><svg className="w-4 h-4 md:w-3.5 md:h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 6h16M4 12h16M4 18h16" /></svg>Lista</button>
+                      <button onClick={() => setModoExibicao('grade')} className={`flex-1 sm:flex-none flex items-center justify-center gap-1.5 px-3 py-2 md:py-1.5 text-xs font-bold rounded-md transition-colors ${modoExibicao === 'grade' ? 'bg-[#337418] text-[#F8F8F8]' : `${t.textSecondary} hover:${t.textPrimary}`}`}><svg className="w-4 h-4 md:w-3.5 md:h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2zM14 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z" /></svg>Grade</button>
+                    </div>
+                  </div>
                 </div>
-                
-                <div className={`flex ${t.innerAlt} rounded-xl border ${t.border} p-1 w-full lg:w-auto`}>
-                  <button 
-                    onClick={() => setFiltroStatusPedido('aberto')} 
-                    className={`flex-1 lg:flex-none px-6 py-2 text-xs font-bold rounded-lg transition-all ${filtroStatusPedido === 'aberto' ? 'bg-[#337418] text-white shadow-md' : `text-gray-500 hover:${t.textPrimary}`}`}
-                  >Em Aberto</button>
-                  <button 
-                    onClick={() => setFiltroStatusPedido('faturado')} 
-                    className={`flex-1 lg:flex-none px-6 py-2 text-xs font-bold rounded-lg transition-all ${filtroStatusPedido === 'faturado' ? 'bg-[#337418] text-white shadow-md' : `text-gray-500 hover:${t.textPrimary}`}`}
-                  >Faturados</button>
-                </div>
-              </div>
-              
-              <div className={`flex flex-col xl:flex-row items-center gap-3 w-full mb-6`}>
-                 <div className="relative w-full xl:w-64 flex-shrink-0">
-                   <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none"><svg className={`w-4 h-4 ${t.textSecondary}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" /></svg></div>
-                   <input type="text" value={termoPesquisa} onChange={(e) => setTermoPesquisa(e.target.value)} placeholder="Buscar pedido ou OF" className={`w-full pl-9 pr-3 py-3 md:py-2 bg-transparent border ${t.border} rounded-lg text-xs md:text-sm ${t.textPrimary} focus:outline-none focus:border-[#5DD62C]`} />
-                 </div>
-                 
-                 <div className="flex flex-col sm:flex-row w-full xl:w-auto justify-between items-stretch sm:items-center gap-3 ml-auto">
-                   <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 w-full sm:w-auto">
-                     <select value={ordenarPor} onChange={(e) => setOrdenarPor(e.target.value)} className={`w-full sm:w-auto ${t.card} text-xs font-bold ${t.textPrimary} border ${t.border} rounded-lg px-3 py-3 md:py-2 focus:outline-none focus:${t.borderAccent} cursor-pointer`}>
-                       <option value="prazo">Dias Restantes</option><option value="id_pedido">Pedido</option><option value="emissao">Data Emissão</option>
-                     </select>
-                     <select value={ordem} onChange={(e) => setOrdem(e.target.value)} className={`w-full sm:w-auto ${t.card} text-xs font-bold ${t.textPrimary} border ${t.border} rounded-lg px-3 py-3 md:py-2 focus:outline-none focus:${t.borderAccent} cursor-pointer`}>
-                       <option value="asc">Crescente (A-Z)</option><option value="desc">Decrescente (Z-A)</option>
-                     </select>
-                   </div>
-                   <div className={`flex items-center justify-center ${t.card} p-1 rounded-lg border ${t.border} w-full sm:w-auto`}>
-                     <button onClick={() => setModoExibicao('lista')} className={`flex-1 sm:flex-none flex items-center justify-center gap-1.5 px-3 py-2 md:py-1.5 text-xs font-bold rounded-md transition-colors ${modoExibicao === 'lista' ? 'bg-[#337418] text-[#F8F8F8]' : `${t.textSecondary} hover:${t.textPrimary}`}`}><svg className="w-4 h-4 md:w-3.5 md:h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 6h16M4 12h16M4 18h16" /></svg>Lista</button>
-                     <button onClick={() => setModoExibicao('grade')} className={`flex-1 sm:flex-none flex items-center justify-center gap-1.5 px-3 py-2 md:py-1.5 text-xs font-bold rounded-md transition-colors ${modoExibicao === 'grade' ? 'bg-[#337418] text-[#F8F8F8]' : `${t.textSecondary} hover:${t.textPrimary}`}`}><svg className="w-4 h-4 md:w-3.5 md:h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2zM14 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z" /></svg>Grade</button>
-                   </div>
-                 </div>
-              </div>
 
-              {carregando ? (<div className={`p-12 text-center ${t.textSecondary}`}>Carregando dados dos pedidos...</div>) : (
-                <>
-                  <div className={modoExibicao === 'lista' ? 'flex flex-col gap-3' : 'grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-5'}>
-                    {pedidosAbaControlePaginados.map((pedido) => {
-                      const estaExpandido = pedidosExpandidos.includes(pedido.id)
-                      const { concluidas, total } = obterContadorOfs(pedido)
-                      const todasConcluidas = total > 0 && concluidas === total
-                      const isFaturadoGeral = pedido.status === 'Faturada'
+                {carregando ? (<div className={`p-12 text-center ${t.textSecondary}`}>Carregando dados dos pedidos...</div>) : (
+                  <>
+                    <div className={modoExibicao === 'lista' ? 'flex flex-col gap-3' : 'grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-5'}>
+                      {pedidosAbaControlePaginados.map((pedido) => {
+                        const estaExpandido = pedidosExpandidos.includes(pedido.id)
+                        const { concluidas, total } = obterContadorOfs(pedido)
+                        const todasConcluidas = total > 0 && concluidas === total
+                        const isFaturadoGeral = pedido.status === 'Faturada'
 
-                      return modoExibicao === 'lista' ? (
-                        <div key={pedido.id} className={`${t.inner} rounded-xl border ${t.border} ${t.hoverBorderAccent} transition-all overflow-hidden ${isFaturadoGeral ? 'opacity-70 grayscale hover:grayscale-0' : ''}`}>
-                          <div className="p-4 flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
-                            
-                            <div className="flex items-start gap-4 flex-1 min-w-[240px]">
-                              <button onClick={() => toggleExpandirPedido(pedido.id)} className={`mt-1 p-2 md:p-1.5 ${t.card} ${t.hoverCard} border ${t.border} rounded-lg ${t.textSecondary} hover:${t.textPrimary} transition-colors`}>
-                                <svg className={`w-5 h-5 md:w-4 md:h-4 transition-transform duration-200 ${estaExpandido ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7" /></svg>
-                              </button>
-                              <div>
-                                <div className="flex items-center gap-2 mb-1.5 flex-wrap">
-                                  <span className={`text-xs ${t.card} ${t.textSecondary} px-2.5 py-0.5 rounded-md font-mono font-bold border ${t.border}`}>PEDIDO {pedido.id_pedido}</span>
-                                  {!isFaturadoGeral && <span className={`text-[11px] px-2 py-0.5 rounded-md font-mono font-bold border ${todasConcluidas ? `${t.bgAccentSoft} ${t.textAccent} ${t.borderAccentSoft}` : `${t.card} ${t.textSecondary} ${t.border}`}`}>OFs Prontas: {concluidas}/{total}</span>}
-                                  {isFaturadoGeral && <span className={`text-[11px] px-2 py-0.5 rounded-md font-bold uppercase border bg-gray-500/10 text-gray-400 border-gray-500/20`}>Faturado</span>}
-                                  {pedido.has_entrega_parcial && !isFaturadoGeral && (
-                                    <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 text-[10px] font-bold rounded-full bg-amber-500/10 text-amber-400 border border-amber-500/20">
-                                      <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse"></span>
-                                      ⚠️ Entrega Parcial
-                                    </span>
+                        return modoExibicao === 'lista' ? (
+                          <div key={pedido.id} className={`${t.inner} rounded-xl border ${t.border} ${t.hoverBorderAccent} transition-all overflow-hidden ${isFaturadoGeral ? 'opacity-70 grayscale hover:grayscale-0' : ''}`}>
+                            <div className="p-4 flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+
+                              <div className="flex items-start gap-4 flex-1 min-w-[240px]">
+                                <button onClick={() => toggleExpandirPedido(pedido.id)} className={`mt-1 p-2 md:p-1.5 ${t.card} ${t.hoverCard} border ${t.border} rounded-lg ${t.textSecondary} hover:${t.textPrimary} transition-colors`}>
+                                  <svg className={`w-5 h-5 md:w-4 md:h-4 transition-transform duration-200 ${estaExpandido ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7" /></svg>
+                                </button>
+                                <div>
+                                  <div className="flex items-center gap-2 mb-1.5 flex-wrap">
+                                    <span className={`text-xs ${t.card} ${t.textSecondary} px-2.5 py-0.5 rounded-md font-mono font-bold border ${t.border}`}>PEDIDO {pedido.id_pedido}</span>
+                                    {!isFaturadoGeral && <span className={`text-[11px] px-2 py-0.5 rounded-md font-mono font-bold border ${todasConcluidas ? `${t.bgAccentSoft} ${t.textAccent} ${t.borderAccentSoft}` : `${t.card} ${t.textSecondary} ${t.border}`}`}>OFs Prontas: {concluidas}/{total}</span>}
+                                    {isFaturadoGeral && <span className={`text-[11px] px-2 py-0.5 rounded-md font-bold uppercase border bg-gray-500/10 text-gray-400 border-gray-500/20`}>Faturado</span>}
+                                    {pedido.has_entrega_parcial && !isFaturadoGeral && (
+                                      <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 text-[10px] font-bold rounded-full bg-amber-500/10 text-amber-400 border border-amber-500/20">
+                                        <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse"></span>
+                                        ⚠️ Entrega Parcial
+                                      </span>
+                                    )}
+                                  </div>
+                                  <h3 className={`font-bold ${t.textPrimary} text-base leading-tight`}>{pedido.cliente}</h3>
+                                  {pedido.pedido_cliente && <p className={`text-xs ${t.textAccent} font-mono font-bold mt-1`}>Pedido Cliente: {pedido.pedido_cliente}</p>}
+                                  <p className={`text-[11px] ${t.textSecondary} mt-1`}>{pedido.cidade_bloco} {pedido.endereco_completo ? `• ${pedido.endereco_completo}` : ''}</p>
+                                </div>
+                              </div>
+
+                              <div className={`flex flex-wrap items-center gap-4 md:gap-8 text-xs text-gray-300 w-full md:w-auto justify-between md:justify-end border-t ${t.border} md:border-t-0 pt-4 md:pt-0`}>
+                                {!isFaturadoGeral && (
+                                  <div className="text-left md:text-center w-[45%] md:w-auto">
+                                    <span className={`block text-[10px] ${t.textSecondary} uppercase tracking-wider mb-0.5`}>Itens</span>
+                                    <span className={`font-mono font-bold ${t.textPrimary}`}>{pedido.total_itens_abertos || 0}</span>
+                                  </div>
+                                )}
+                                <div className="text-left md:text-center w-[45%] md:w-auto">
+                                  <span className={`block text-[10px] ${t.textSecondary} uppercase tracking-wider mb-0.5`}>{isFaturadoGeral ? 'Peso Faturado' : 'Peso'}</span>
+                                  <span className={`font-mono font-bold ${isFaturadoGeral ? t.textSecondary : t.textAccent}`}>{formatarKg(pedido.peso_total_kg)} kg</span>
+                                </div>
+                                <div className="text-left md:text-center w-[45%] md:w-auto">
+                                  <span className={`block text-[10px] ${t.textSecondary} uppercase tracking-wider mb-0.5`}>Emissão</span>
+                                  <span className={`font-mono ${t.textPrimary}`}>{pedido.data_emissao || '-'}</span>
+                                </div>
+                                <div className="w-[45%] md:w-auto flex flex-col gap-2 items-end">
+                                  {isFaturadoGeral ? <span className={`text-[11px] font-bold ${t.textSecondary}`}>ENTREGUE</span> : renderizarTagPrazo(pedido.dias_restantes, pedido.data_entrega)}
+                                  {!isFaturadoGeral && (
+                                    <button onClick={(e) => { e.stopPropagation(); alterarStatusPedido(pedido.id, 'Faturada'); }} className={`text-[9px] uppercase tracking-wider font-bold bg-[#5DD62C] hover:bg-[#337418] text-[#0F0F0F] hover:text-[#F8F8F8] px-2 py-1 rounded shadow-sm transition-all`}>
+                                      Forçar Baixa
+                                    </button>
                                   )}
                                 </div>
-                                <h3 className={`font-bold ${t.textPrimary} text-base leading-tight`}>{pedido.cliente}</h3>
-                                {pedido.pedido_cliente && <p className={`text-xs ${t.textAccent} font-mono font-bold mt-1`}>Pedido Cliente: {pedido.pedido_cliente}</p>}
-                                <p className={`text-[11px] ${t.textSecondary} mt-1`}>{pedido.cidade_bloco} {pedido.endereco_completo ? `• ${pedido.endereco_completo}` : ''}</p>
                               </div>
                             </div>
-
-                            <div className={`flex flex-wrap items-center gap-4 md:gap-8 text-xs text-gray-300 w-full md:w-auto justify-between md:justify-end border-t ${t.border} md:border-t-0 pt-4 md:pt-0`}>
-                              {!isFaturadoGeral && (
-                                 <div className="text-left md:text-center w-[45%] md:w-auto">
-                                   <span className={`block text-[10px] ${t.textSecondary} uppercase tracking-wider mb-0.5`}>Itens</span>
-                                   <span className={`font-mono font-bold ${t.textPrimary}`}>{pedido.total_itens_abertos || 0}</span>
-                                 </div>
-                              )}
-                              <div className="text-left md:text-center w-[45%] md:w-auto">
-                                <span className={`block text-[10px] ${t.textSecondary} uppercase tracking-wider mb-0.5`}>{isFaturadoGeral ? 'Peso Faturado' : 'Peso'}</span>
-                                <span className={`font-mono font-bold ${isFaturadoGeral ? t.textSecondary : t.textAccent}`}>{formatarKg(pedido.peso_total_kg)} kg</span>
-                              </div>
-                              <div className="text-left md:text-center w-[45%] md:w-auto">
-                                <span className={`block text-[10px] ${t.textSecondary} uppercase tracking-wider mb-0.5`}>Emissão</span>
-                                <span className={`font-mono ${t.textPrimary}`}>{pedido.data_emissao || '-'}</span>
-                              </div>
-                              <div className="w-[45%] md:w-auto flex flex-col gap-2 items-end">
-                                {isFaturadoGeral ? <span className={`text-[11px] font-bold ${t.textSecondary}`}>ENTREGUE</span> : renderizarTagPrazo(pedido.dias_restantes, pedido.data_entrega)}
-                                {!isFaturadoGeral && (
-                                  <button onClick={(e) => { e.stopPropagation(); alterarStatusPedido(pedido.id, 'Faturada'); }} className={`text-[9px] uppercase tracking-wider font-bold bg-[#5DD62C] hover:bg-[#337418] text-[#0F0F0F] hover:text-[#F8F8F8] px-2 py-1 rounded shadow-sm transition-all`}>
-                                    Forçar Baixa
-                                  </button>
-                                )}
-                              </div>
-                            </div>
-                          </div>
-
-                          {estaExpandido && (
-                            <div className={`${t.innerAlt} p-4 md:p-5 border-t ${t.border} overflow-x-auto`}>
-                              <h4 className={`text-[11px] font-bold ${t.textSecondary} uppercase tracking-wider mb-4`}>Itens do Pedido (Visão Detalhada)</h4>
-                              {pedido.itens && pedido.itens.length > 0 ? (
-                                <div className="w-full scrollbar-hide">
-                                  <table className="w-full text-left border-collapse text-xs min-w-[800px]">
-                                    <thead>
-                                      <tr className={`border-b ${t.border} ${t.textSecondary} uppercase font-mono`}>
-                                        <th className="py-2.5 px-3">OF</th>
-                                        <th className="py-2.5 px-3">FT</th>
-                                        <th className="py-2.5 px-3">Referência</th>
-                                        <th className="py-2.5 px-3 text-center">Data Prog.</th>
-                                        <th className="py-2.5 px-3 text-center">Qtde (Restante)</th>
-                                        <th className="py-2.5 px-3 text-right">Peso (Total)</th>
-                                        <th className="py-2.5 px-3 text-right">Val. Unit.</th>
-                                        <th className="py-2.5 px-3 text-right">Val. Total</th>
-                                        <th className="py-2.5 px-3 text-center">Status OF</th>
-                                      </tr>
-                                    </thead>
-                                    <tbody className={`divide-y ${t.divider} ${t.textPrimary}`}>
-                                      {pedido.itens.map((item, idx) => {
-                                        const numeroOf = item.id_numof || '-';
-                                        const isFaturada = item.statusOF === 'Faturada';
-                                        const qtdExibir = item.qtd_produzida !== null && item.qtd_produzida !== undefined && item.qtd_produzida !== "" ? parseFloat(item.qtd_produzida) : item.qtd_restante;
-                                        const pesoUnit = item.qtd_prog > 0 ? (item.peso_of / item.qtd_prog) : 0;
-                                        const pesoExibir = qtdExibir * pesoUnit;
-                                        
-                                        return (
-                                          <tr key={idx} className={`${t.hoverCard} transition-colors ${isFaturada ? 'opacity-40 grayscale' : ''}`}>
-                                            <td className={`py-3 px-3 font-mono font-bold ${t.textAccent}`}>{numeroOf.toString().startsWith("ITEM") ? numeroOf : `OF ${numeroOf}`}</td>
-                                            <td className={`py-3 px-3 font-mono ${t.textSecondary}`}>{item.id_produto || '-'}</td>
-                                            <td className={`py-3 px-3 font-medium ${t.textPrimary}`}>{item.referencia || '-'}</td>
-                                            <td className="py-3 px-3 text-center font-mono">{item.data_programada || '-'}</td>
-                                            <td className={`py-3 px-3 text-center font-mono ${t.textPrimary}`}>{Number(qtdExibir).toLocaleString('pt-BR')} / {Number(item.qtd_prog).toLocaleString('pt-BR')}</td>
-                                            <td className={`py-3 px-3 text-right font-mono ${t.textAccent}`}>{formatarKg(pesoExibir)} kg</td>
-                                            <td className={`py-3 px-3 text-right font-mono ${t.textSecondary}`}>R$ {(item.preco_unitario || 0).toLocaleString('pt-BR', {minimumFractionDigits:2, maximumFractionDigits:2})}</td>
-                                            <td className={`py-3 px-3 text-right font-mono font-bold ${t.textPrimary}`}>R$ {((qtdExibir || 0) * (item.preco_unitario || 0)).toLocaleString('pt-BR', {minimumFractionDigits:2, maximumFractionDigits:2})}</td>
-                                            <td className="py-3 px-3 text-center">
-                                              <select value={item.statusOF || 'Pendente'} onChange={(e) => alternarStatusOf(pedido.id, item.id_numof, e.target.value)} className={`text-[10px] font-bold rounded-full px-2.5 py-1.5 border cursor-pointer focus:outline-none ${obterEstiloStatusCompleto(item.statusOF)}`}>
-                                                <option value="Pendente" className={`${t.card} text-amber-500`}>O Pendente</option>
-                                                <option value="Compras" className={`${t.card} text-sky-500`}>Compras</option>
-                                                <option value="Produção" className={`${t.card} text-purple-500`}>Produção</option>
-                                                <option value="Parcial" className={`${t.card} text-teal-500`}>Parcial</option>
-                                                <option value="Pronto" className={`${t.card} ${t.textAccent}`}>✓ Concluído</option>
-                                                <option value="Faturada" className={`${t.card} text-gray-500`}>Faturada (Entregue)</option>
-                                              </select>
-                                            </td>
-                                          </tr>
-                                        )
-                                      })}
-                                    </tbody>
-                                  </table>
-                                </div>
-                              ) : (<div className={`text-xs ${t.textSecondary} italic p-4 text-center`}>Nenhum item detalhado encontrado.</div>)}
-                            </div>
-                          )}                          
-                        </div>
-                      ) : (
-                        <div key={pedido.id} className={`${t.inner} p-4 md:p-5 rounded-2xl border ${t.border} flex flex-col justify-between ${t.hoverBorderAccent} transition-colors ${isFaturadoGeral ? 'opacity-70 grayscale hover:grayscale-0' : ''}`}>
-                          <div>
-                            <div className="flex justify-between items-start mb-3 gap-2">
-                              <div>
-                                <div className="flex items-center gap-2 flex-wrap mb-2">
-                                  <span className={`text-[11px] ${t.card} ${t.textSecondary} px-2.5 py-0.5 rounded-md font-mono font-bold border ${t.border}`}>PEDIDO {pedido.id_pedido}</span>
-                                  {!isFaturadoGeral && <span className={`text-[10px] px-2 py-0.5 rounded-md font-mono font-bold border ${todasConcluidas ? `${t.bgAccentSoft} ${t.textAccent} ${t.borderAccentSoft}` : `${t.card} ${t.textSecondary} ${t.border}`}`}>OFs Ativas: {concluidas}/{total}</span>}
-                                  {isFaturadoGeral && <span className={`text-[10px] px-2 py-0.5 rounded-md font-bold uppercase border bg-gray-500/10 text-gray-400 border-gray-500/20`}>Faturado</span>}
-                                  {pedido.has_entrega_parcial && !isFaturadoGeral && (
-                                    <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 text-[10px] font-bold rounded-full bg-amber-500/10 text-amber-400 border border-amber-500/20">
-                                      <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse"></span>
-                                      ⚠️ Entrega Parcial
-                                    </span>
-                                  )}
-                                </div>
-                                <h3 className={`font-bold ${t.textPrimary} text-base leading-tight`}>{pedido.cliente}</h3>
-                                {pedido.pedido_cliente && <p className={`text-xs ${t.textAccent} font-mono font-bold mt-1`}>Pedido Cliente {pedido.pedido_cliente}</p>}
-                              </div>
-                              <div className="flex-shrink-0 flex flex-col items-end gap-2">
-                                {isFaturadoGeral ? <span className={`text-[11px] font-bold ${t.textSecondary}`}>ENTREGUE</span> : renderizarTagPrazo(pedido.dias_restantes, pedido.data_entrega)}
-                                {!isFaturadoGeral && (
-                                  <button onClick={(e) => { e.stopPropagation(); alterarStatusPedido(pedido.id, 'Faturada'); }} className={`text-[9px] uppercase tracking-wider font-bold bg-[#5DD62C] hover:bg-[#337418] text-[#0F0F0F] hover:text-[#F8F8F8] px-2 py-1 rounded shadow-sm transition-all`}>
-                                    Forçar Baixa
-                                  </button>
-                                )}
-                              </div>
-                            </div>
-                            <div className={`my-4 py-3 border-y ${t.border} grid ${isFaturadoGeral ? 'grid-cols-2' : 'grid-cols-3'} gap-2 text-center text-xs`}>
-                              {!isFaturadoGeral && <div><span className={`block text-[10px] ${t.textSecondary} uppercase tracking-wider mb-1`}>Itens Ativos</span><span className={`font-mono font-bold ${t.textPrimary}`}>{pedido.total_itens_abertos || 0}</span></div>}
-                              <div><span className={`block text-[10px] ${t.textSecondary} uppercase tracking-wider mb-1`}>{isFaturadoGeral ? 'Peso Faturado' : 'Peso Faltante'}</span><span className={`font-mono font-bold ${isFaturadoGeral ? t.textSecondary : t.textAccent}`}>{formatarKg(pedido.peso_total_kg)} kg</span></div>
-                              <div><span className={`block text-[10px] ${t.textSecondary} uppercase tracking-wider mb-1`}>Emissão</span><span className={`font-mono ${t.textPrimary}`}>{pedido.data_emissao || '-'}</span></div>
-                            </div>
-                          </div>
-
-                          <div className="space-y-4 pt-1">
-                            <button onClick={() => toggleExpandirPedido(pedido.id)} className={`w-full py-2.5 md:py-2 px-3 ${t.card} ${t.hoverCard} border ${t.border} rounded-lg text-xs font-bold ${t.textSecondary} hover:${t.textPrimary} flex items-center justify-center gap-2 transition-colors`}>
-                              <span>{estaExpandido ? 'Ocultar OFs' : 'Ver OFs do Pedido'}</span>
-                              <svg className={`w-4 h-4 md:w-3.5 md:h-3.5 transition-transform duration-200 ${estaExpandido ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7" /></svg>
-                            </button>
 
                             {estaExpandido && (
-                              <div className={`${t.card} p-3 rounded-xl border ${t.border} text-xs space-y-2 max-h-60 overflow-y-auto`}>
+                              <div className={`${t.innerAlt} p-4 md:p-5 border-t ${t.border} overflow-x-auto`}>
+                                <h4 className={`text-[11px] font-bold ${t.textSecondary} uppercase tracking-wider mb-4`}>Itens do Pedido (Visão Detalhada)</h4>
                                 {pedido.itens && pedido.itens.length > 0 ? (
-                                  pedido.itens.map((item, idx) => {
-                                    const numeroOf = item.id_numof || '-';
-                                    const qtdExibir = item.qtd_produzida !== null && item.qtd_produzida !== undefined && item.qtd_produzida !== "" ? parseFloat(item.qtd_produzida) : item.qtd_restante;
-                                    const pesoUnit = item.qtd_prog > 0 ? (item.peso_of / item.qtd_prog) : 0;
-                                    const pesoExibir = qtdExibir * pesoUnit;
+                                  <div className="w-full scrollbar-hide">
+                                    <table className="w-full text-left border-collapse text-xs min-w-[800px]">
+                                      <thead>
+                                        <tr className={`border-b ${t.border} ${t.textSecondary} uppercase font-mono`}>
+                                          <th className="py-2.5 px-3">OF</th>
+                                          <th className="py-2.5 px-3">FT</th>
+                                          <th className="py-2.5 px-3">Referência</th>
+                                          <th className="py-2.5 px-3 text-center">Data Prog.</th>
+                                          <th className="py-2.5 px-3 text-center">Qtde (Restante)</th>
+                                          <th className="py-2.5 px-3 text-right">Peso (Total)</th>
+                                          <th className="py-2.5 px-3 text-right">Val. Unit.</th>
+                                          <th className="py-2.5 px-3 text-right">Val. Total</th>
+                                          <th className="py-2.5 px-3 text-center">Status OF</th>
+                                        </tr>
+                                      </thead>
+                                      <tbody className={`divide-y ${t.divider} ${t.textPrimary}`}>
+                                        {pedido.itens.map((item, idx) => {
+                                          const numeroOf = item.id_numof || '-';
+                                          const isFaturada = item.statusOF === 'Faturada';
+                                          const qtdExibir = item.qtd_produzida !== null && item.qtd_produzida !== undefined && item.qtd_produzida !== "" ? parseFloat(item.qtd_produzida) : item.qtd_restante;
+                                          const pesoUnit = item.qtd_prog > 0 ? (item.peso_of / item.qtd_prog) : 0;
+                                          const pesoExibir = qtdExibir * pesoUnit;
 
-                                    return (
-                                      <div key={idx} className={`p-3 ${t.inner} border ${t.border} rounded-lg flex flex-col gap-2 ${item.statusOF === 'Faturada' ? 'opacity-40 grayscale' : ''}`}>
-                                        <div className="flex justify-between items-center font-mono">
-                                          <span className={`font-bold ${t.textAccent}`}>{numeroOf.toString().startsWith("ITEM") ? numeroOf : `OF ${numeroOf}`}</span>
-                                          <span className={`text-[10px] ${t.textSecondary}`}>{item.data_programada}</span>
-                                        </div>
-                                        <div className={`font-bold ${t.textPrimary} truncate`}>{item.referencia || item.id_produto}</div>
-                                        <div className={`flex justify-between items-center text-[11px] ${t.textSecondary}`}>
-                                          <span>Qtd Restante: <span className={t.textPrimary}>{Number(qtdExibir).toLocaleString('pt-BR')} / {Number(item.qtd_prog).toLocaleString('pt-BR')}</span></span>
-                                          <span className={`${t.textAccent} font-mono font-bold`}>{formatarKg(pesoExibir)} kg</span>
-                                        </div>
-                                        <select value={item.statusOF || 'Pendente'} onChange={(e) => alternarStatusOf(pedido.id, item.id_numof, e.target.value)} className={`w-full py-2 md:py-1.5 mt-1 rounded-md text-[11px] md:text-[10px] font-bold border transition-all cursor-pointer focus:outline-none ${obterEstiloStatusCompleto(item.statusOF)}`}>
-                                          <option value="Pendente" className={`${t.card} text-amber-500`}>Pendente</option>
-                                          <option value="Compras" className={`${t.card} text-sky-500`}>Compras</option>
-                                          <option value="Produção" className={`${t.card} text-purple-500`}>Produção</option>
-                                          <option value="Parcial" className={`${t.card} text-teal-500`}>Parcial</option>
-                                          <option value="Pronto" className={`${t.card} ${t.textAccent}`}>Concluído</option>
-                                          <option value="Faturada" className={`${t.card} text-gray-500`}>Faturada</option>
-                                        </select>
-                                      </div>
-                                    )
-                                  })
-                                ) : (<div className={`${t.textSecondary} text-center py-3 italic text-[11px]`}>Nenhum item encontrado.</div>)}
+                                          return (
+                                            <tr key={idx} className={`${t.hoverCard} transition-colors ${isFaturada ? 'opacity-40 grayscale' : ''}`}>
+                                              <td className={`py-3 px-3 font-mono font-bold ${t.textAccent}`}>{numeroOf.toString().startsWith("ITEM") ? numeroOf : `OF ${numeroOf}`}</td>
+                                              <td className={`py-3 px-3 font-mono ${t.textSecondary}`}>{item.id_produto || '-'}</td>
+                                              <td className={`py-3 px-3 font-medium ${t.textPrimary}`}>{item.referencia || '-'}</td>
+                                              <td className="py-3 px-3 text-center font-mono">{item.data_programada || '-'}</td>
+                                              <td className={`py-3 px-3 text-center font-mono ${t.textPrimary}`}>{Number(qtdExibir).toLocaleString('pt-BR')} / {Number(item.qtd_prog).toLocaleString('pt-BR')}</td>
+                                              <td className={`py-3 px-3 text-right font-mono ${t.textAccent}`}>{formatarKg(pesoExibir)} kg</td>
+                                              <td className={`py-3 px-3 text-right font-mono ${t.textSecondary}`}>R$ {(item.preco_unitario || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                                              <td className={`py-3 px-3 text-right font-mono font-bold ${t.textPrimary}`}>R$ {((qtdExibir || 0) * (item.preco_unitario || 0)).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                                              <td className="py-3 px-3 text-center">
+                                                <select value={item.statusOF || 'Pendente'} onChange={(e) => alternarStatusOf(pedido.id, item.id_numof, e.target.value)} className={`text-[10px] font-bold rounded-full px-2.5 py-1.5 border cursor-pointer focus:outline-none ${obterEstiloStatusCompleto(item.statusOF)}`}>
+                                                  <option value="Pendente" className={`${t.card} text-amber-500`}>O Pendente</option>
+                                                  <option value="Compras" className={`${t.card} text-sky-500`}>Compras</option>
+                                                  <option value="Produção" className={`${t.card} text-purple-500`}>Produção</option>
+                                                  <option value="Parcial" className={`${t.card} text-teal-500`}>Parcial</option>
+                                                  <option value="Pronto" className={`${t.card} ${t.textAccent}`}>✓ Concluído</option>
+                                                  <option value="Faturada" className={`${t.card} text-gray-500`}>Faturada (Entregue)</option>
+                                                </select>
+                                              </td>
+                                            </tr>
+                                          )
+                                        })}
+                                      </tbody>
+                                    </table>
+                                  </div>
+                                ) : (<div className={`text-xs ${t.textSecondary} italic p-4 text-center`}>Nenhum item detalhado encontrado.</div>)}
                               </div>
                             )}
                           </div>
-                        </div>
-                      )
-                    })}
+                        ) : (
+                          <div key={pedido.id} className={`${t.inner} p-4 md:p-5 rounded-2xl border ${t.border} flex flex-col justify-between ${t.hoverBorderAccent} transition-colors ${isFaturadoGeral ? 'opacity-70 grayscale hover:grayscale-0' : ''}`}>
+                            <div>
+                              <div className="flex justify-between items-start mb-3 gap-2">
+                                <div>
+                                  <div className="flex items-center gap-2 flex-wrap mb-2">
+                                    <span className={`text-[11px] ${t.card} ${t.textSecondary} px-2.5 py-0.5 rounded-md font-mono font-bold border ${t.border}`}>PEDIDO {pedido.id_pedido}</span>
+                                    {!isFaturadoGeral && <span className={`text-[10px] px-2 py-0.5 rounded-md font-mono font-bold border ${todasConcluidas ? `${t.bgAccentSoft} ${t.textAccent} ${t.borderAccentSoft}` : `${t.card} ${t.textSecondary} ${t.border}`}`}>OFs Ativas: {concluidas}/{total}</span>}
+                                    {isFaturadoGeral && <span className={`text-[10px] px-2 py-0.5 rounded-md font-bold uppercase border bg-gray-500/10 text-gray-400 border-gray-500/20`}>Faturado</span>}
+                                    {pedido.has_entrega_parcial && !isFaturadoGeral && (
+                                      <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 text-[10px] font-bold rounded-full bg-amber-500/10 text-amber-400 border border-amber-500/20">
+                                        <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse"></span>
+                                        ⚠️ Entrega Parcial
+                                      </span>
+                                    )}
+                                  </div>
+                                  <h3 className={`font-bold ${t.textPrimary} text-base leading-tight`}>{pedido.cliente}</h3>
+                                  {pedido.pedido_cliente && <p className={`text-xs ${t.textAccent} font-mono font-bold mt-1`}>Pedido Cliente {pedido.pedido_cliente}</p>}
+                                </div>
+                                <div className="flex-shrink-0 flex flex-col items-end gap-2">
+                                  {isFaturadoGeral ? <span className={`text-[11px] font-bold ${t.textSecondary}`}>ENTREGUE</span> : renderizarTagPrazo(pedido.dias_restantes, pedido.data_entrega)}
+                                  {!isFaturadoGeral && (
+                                    <button onClick={(e) => { e.stopPropagation(); alterarStatusPedido(pedido.id, 'Faturada'); }} className={`text-[9px] uppercase tracking-wider font-bold bg-[#5DD62C] hover:bg-[#337418] text-[#0F0F0F] hover:text-[#F8F8F8] px-2 py-1 rounded shadow-sm transition-all`}>
+                                      Forçar Baixa
+                                    </button>
+                                  )}
+                                </div>
+                              </div>
+                              <div className={`my-4 py-3 border-y ${t.border} grid ${isFaturadoGeral ? 'grid-cols-2' : 'grid-cols-3'} gap-2 text-center text-xs`}>
+                                {!isFaturadoGeral && <div><span className={`block text-[10px] ${t.textSecondary} uppercase tracking-wider mb-1`}>Itens Ativos</span><span className={`font-mono font-bold ${t.textPrimary}`}>{pedido.total_itens_abertos || 0}</span></div>}
+                                <div><span className={`block text-[10px] ${t.textSecondary} uppercase tracking-wider mb-1`}>{isFaturadoGeral ? 'Peso Faturado' : 'Peso Faltante'}</span><span className={`font-mono font-bold ${isFaturadoGeral ? t.textSecondary : t.textAccent}`}>{formatarKg(pedido.peso_total_kg)} kg</span></div>
+                                <div><span className={`block text-[10px] ${t.textSecondary} uppercase tracking-wider mb-1`}>Emissão</span><span className={`font-mono ${t.textPrimary}`}>{pedido.data_emissao || '-'}</span></div>
+                              </div>
+                            </div>
 
-                    {pedidosAbaControle.length === 0 && (<div className={`col-span-full p-8 text-center ${t.textSecondary} ${t.card} rounded-2xl border ${t.border}`}>{termoPesquisa ? 'Nenhum pedido encontrado.' : 'Nenhum pedido com os filtros atuais.'}</div>)}
-                  </div>
-                  
-                  {pedidosAbaControle.length > limiteExibicao && (
-                    <div className="flex justify-center mt-6">
-                      <button onClick={() => setLimiteExibicao(prev => prev + 20)} className={`px-6 py-3 rounded-xl text-sm font-bold shadow-md transition-all bg-[#5DD62C] hover:bg-[#337418] text-[#0F0F0F] hover:text-[#F8F8F8] w-full md:w-auto hover:scale-105`}>
-                        Carregar Mais ({pedidosAbaControle.length - limiteExibicao} restantes)
-                      </button>
+                            <div className="space-y-4 pt-1">
+                              <button onClick={() => toggleExpandirPedido(pedido.id)} className={`w-full py-2.5 md:py-2 px-3 ${t.card} ${t.hoverCard} border ${t.border} rounded-lg text-xs font-bold ${t.textSecondary} hover:${t.textPrimary} flex items-center justify-center gap-2 transition-colors`}>
+                                <span>{estaExpandido ? 'Ocultar OFs' : 'Ver OFs do Pedido'}</span>
+                                <svg className={`w-4 h-4 md:w-3.5 md:h-3.5 transition-transform duration-200 ${estaExpandido ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7" /></svg>
+                              </button>
+
+                              {estaExpandido && (
+                                <div className={`${t.card} p-3 rounded-xl border ${t.border} text-xs space-y-2 max-h-60 overflow-y-auto`}>
+                                  {pedido.itens && pedido.itens.length > 0 ? (
+                                    pedido.itens.map((item, idx) => {
+                                      const numeroOf = item.id_numof || '-';
+                                      const qtdExibir = item.qtd_produzida !== null && item.qtd_produzida !== undefined && item.qtd_produzida !== "" ? parseFloat(item.qtd_produzida) : item.qtd_restante;
+                                      const pesoUnit = item.qtd_prog > 0 ? (item.peso_of / item.qtd_prog) : 0;
+                                      const pesoExibir = qtdExibir * pesoUnit;
+
+                                      return (
+                                        <div key={idx} className={`p-3 ${t.inner} border ${t.border} rounded-lg flex flex-col gap-2 ${item.statusOF === 'Faturada' ? 'opacity-40 grayscale' : ''}`}>
+                                          <div className="flex justify-between items-center font-mono">
+                                            <span className={`font-bold ${t.textAccent}`}>{numeroOf.toString().startsWith("ITEM") ? numeroOf : `OF ${numeroOf}`}</span>
+                                            <span className={`text-[10px] ${t.textSecondary}`}>{item.data_programada}</span>
+                                          </div>
+                                          <div className={`font-bold ${t.textPrimary} truncate`}>{item.referencia || item.id_produto}</div>
+                                          <div className={`flex justify-between items-center text-[11px] ${t.textSecondary}`}>
+                                            <span>Qtd Restante: <span className={t.textPrimary}>{Number(qtdExibir).toLocaleString('pt-BR')} / {Number(item.qtd_prog).toLocaleString('pt-BR')}</span></span>
+                                            <span className={`${t.textAccent} font-mono font-bold`}>{formatarKg(pesoExibir)} kg</span>
+                                          </div>
+                                          <select value={item.statusOF || 'Pendente'} onChange={(e) => alternarStatusOf(pedido.id, item.id_numof, e.target.value)} className={`w-full py-2 md:py-1.5 mt-1 rounded-md text-[11px] md:text-[10px] font-bold border transition-all cursor-pointer focus:outline-none ${obterEstiloStatusCompleto(item.statusOF)}`}>
+                                            <option value="Pendente" className={`${t.card} text-amber-500`}>Pendente</option>
+                                            <option value="Compras" className={`${t.card} text-sky-500`}>Compras</option>
+                                            <option value="Produção" className={`${t.card} text-purple-500`}>Produção</option>
+                                            <option value="Parcial" className={`${t.card} text-teal-500`}>Parcial</option>
+                                            <option value="Pronto" className={`${t.card} ${t.textAccent}`}>Concluído</option>
+                                            <option value="Faturada" className={`${t.card} text-gray-500`}>Faturada</option>
+                                          </select>
+                                        </div>
+                                      )
+                                    })
+                                  ) : (<div className={`${t.textSecondary} text-center py-3 italic text-[11px]`}>Nenhum item encontrado.</div>)}
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        )
+                      })}
+
+                      {pedidosAbaControle.length === 0 && (<div className={`col-span-full p-8 text-center ${t.textSecondary} ${t.card} rounded-2xl border ${t.border}`}>{termoPesquisa ? 'Nenhum pedido encontrado.' : 'Nenhum pedido com os filtros atuais.'}</div>)}
                     </div>
-                  )}
-                </>
-              )}
+
+                    {pedidosAbaControle.length > limiteExibicao && (
+                      <div className="flex justify-center mt-6">
+                        <button onClick={() => setLimiteExibicao(prev => prev + 20)} className={`px-6 py-3 rounded-xl text-sm font-bold shadow-md transition-all bg-[#5DD62C] hover:bg-[#337418] text-[#0F0F0F] hover:text-[#F8F8F8] w-full md:w-auto hover:scale-105`}>
+                          Carregar Mais ({pedidosAbaControle.length - limiteExibicao} restantes)
+                        </button>
+                      </div>
+                    )}
+                  </>
+                )}
+              </div>
             </div>
-          </div>
           );
         })()}
 
@@ -1573,7 +1711,7 @@ function App() {
                   Atualizar Compras
                 </button>
               </div>
-              
+
               <div className="space-y-4">
                 <h3 className={`text-lg font-bold ${isDarkMode ? 'text-amber-400' : 'text-amber-600'} flex items-center gap-2`}>
                   Compras em Aberto ({comprasEmAberto.length})
@@ -1625,12 +1763,12 @@ function App() {
                 <div className="flex justify-between items-center mb-1.5">
                   <p className={`text-[13px] font-medium ${t.textSecondary}`}>Faturamento ({empresaFiltro === 'ruycepel' ? 'Ruycepel' : empresaFiltro === 'elly' ? 'Elly' : 'Total'})</p>
                   <div className={`flex bg-[#151515] rounded-md border ${t.border} p-0.5 ml-2`}>
-                    <button 
-                      onClick={() => setMostrarIPI(false)} 
+                    <button
+                      onClick={() => setMostrarIPI(false)}
                       className={`px-2 py-0.5 text-[10px] font-bold rounded-sm transition-all ${!mostrarIPI ? 'bg-[#337418] text-white shadow-sm' : 'text-gray-500 hover:text-gray-300'}`}
                     >Sem IPI</button>
-                    <button 
-                      onClick={() => setMostrarIPI(true)} 
+                    <button
+                      onClick={() => setMostrarIPI(true)}
                       className={`px-2 py-0.5 text-[10px] font-bold rounded-sm transition-all ${mostrarIPI ? 'bg-[#337418] text-white shadow-sm' : 'text-gray-500 hover:text-gray-300'}`}
                     >Com IPI</button>
                   </div>
@@ -1639,13 +1777,13 @@ function App() {
                   R$ {(mostrarIPI ? dadosDashboardAtivo.com_ipi : dadosDashboardAtivo.sem_ipi || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                 </p>
               </div>
-              
+
               <div className={`${t.card} p-5 md:p-6 rounded-2xl shadow-md flex flex-col justify-center relative overflow-hidden`}>
                 <div className={`absolute top-0 right-0 w-2 h-full bg-sky-500`}></div>
                 <p className={`text-[13px] font-medium ${t.textSecondary} mb-1.5`}>Peso Expedido ({empresaFiltro === 'ruycepel' ? 'Ruycepel' : empresaFiltro === 'elly' ? 'Elly' : 'Total'})</p>
                 <p className={`text-2xl md:text-3xl font-bold ${t.textPrimary}`}>{formatarKg(dadosDashboardAtivo.peso_mes_kg)} <span className={`text-sm md:text-base font-medium ${t.textAccent} ml-1`}>kg</span></p>
               </div>
-              
+
               <div className={`${t.card} p-5 md:p-6 rounded-2xl shadow-md flex flex-col justify-center relative overflow-hidden`}>
                 <div className={`absolute top-0 right-0 w-2 h-full bg-indigo-500`}></div>
                 <p className={`text-[13px] font-medium ${t.textSecondary} mb-1.5`}>NFs Emitidas</p>
@@ -1678,17 +1816,17 @@ function App() {
                 <h3 className={`text-lg font-bold ${t.textPrimary} mb-5 border-b ${t.border} pb-2`}>Distribuição de OFs Por Estágio (Kanban)</h3>
                 <div className="space-y-4">
                   {['Pendente', 'Compras', 'Produção', 'Parcial', 'Pronto', 'Faturada'].map(stage => {
-                    const totalOFS = Object.values(dadosDashboard.distribuicao_kanban).reduce((a,b)=>a+b,0);
+                    const totalOFS = Object.values(dadosDashboard.distribuicao_kanban).reduce((a, b) => a + b, 0);
                     const count = dadosDashboard.distribuicao_kanban[stage] || 0;
                     const color = stage === 'Pronto' ? 'bg-[#5DD62C]' : stage === 'Produção' ? 'bg-purple-500' : stage === 'Compras' ? 'bg-sky-500' : stage === 'Parcial' ? 'bg-teal-500' : stage === 'Faturada' ? 'bg-gray-500' : 'bg-amber-500';
                     return (
                       <div key={stage}>
                         <div className="flex justify-between text-xs font-semibold mb-1.5">
                           <span className={t.textPrimary}>{stage} ({count})</span>
-                          <span className={t.textSecondary}>{totalOFS ? Math.round((count/totalOFS)*100) : 0}%</span>
+                          <span className={t.textSecondary}>{totalOFS ? Math.round((count / totalOFS) * 100) : 0}%</span>
                         </div>
                         <div className={`w-full ${t.inner} h-3 rounded-full overflow-hidden border ${t.border}`}>
-                          <div className={`${color} h-full transition-all duration-500`} style={{ width: `${totalOFS ? (count/totalOFS)*100 : 0}%` }}></div>
+                          <div className={`${color} h-full transition-all duration-500`} style={{ width: `${totalOFS ? (count / totalOFS) * 100 : 0}%` }}></div>
                         </div>
                       </div>
                     )
@@ -1696,6 +1834,103 @@ function App() {
                 </div>
               </div>
             </div>
+          </div>
+        )}
+
+        {/* ABA ESTOQUE DE CAIXAS */}
+        {abaAtiva === 'estoque' && (
+          <div className="space-y-6">
+            <div className={`flex flex-col sm:flex-row justify-between items-start sm:items-center border-b ${t.border} pb-4 sm:pb-3 gap-3`}>
+              <div>
+                <h2 className={`text-xl font-bold ${t.textPrimary}`}>Estoque de Caixas (Sobras de Produção)</h2>
+                <p className={`text-sm ${t.textSecondary}`}>Estoque gerado a partir da diferença entre quantidade produzida e faturada.</p>
+              </div>
+              <div className="flex gap-4">
+                <button onClick={() => setModalEstoqueAberto(true)} className="bg-[#5DD62C] hover:bg-[#337418] text-[#0F0F0F] hover:text-[#F8F8F8] px-4 py-2 rounded-xl text-xs font-bold transition-all shadow-md">
+                  + Adicionar Manualmente
+                </button>
+                <div className="text-right">
+                  <span className={`block text-[10px] uppercase ${t.textSecondary} mb-0.5`}>Peso Total em Estoque</span>
+                  <span className={`font-mono font-bold ${t.textAccent}`}>{formatarKg(estoque.reduce((acc, e) => acc + (e.peso_total || 0), 0))} kg</span>
+                </div>
+                <div className="text-right">
+                  <span className={`block text-[10px] uppercase ${t.textSecondary} mb-0.5`}>Valor Total Estimado</span>
+                  <span className={`font-mono font-bold ${t.textPrimary}`}>R$ {estoque.reduce((acc, e) => acc + (e.valor_total || 0), 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                </div>
+              </div>
+            </div>
+
+            <div className="relative">
+              <svg className={`absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 ${t.textSecondary}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+              </svg>
+              <input
+                type="text"
+                placeholder="Pesquisar por referência ou cliente..."
+                value={termoPesquisaEstoque}
+                onChange={(e) => setTermoPesquisaEstoque(e.target.value)}
+                className={`w-full pl-12 pr-4 py-3 sm:py-3 rounded-xl border ${t.border} ${t.bg} ${t.textPrimary} focus:outline-none focus:ring-2 focus:ring-[#5DD62C]/50 transition-all font-medium text-sm`}
+              />
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
+              {estoqueFiltrado.map((item, idx) => (
+                <div key={`${item.id_produto}_${idx}`} className={`${t.card} rounded-xl overflow-hidden shadow-lg border ${t.border} hover:border-[#5DD62C]/50 transition-all`}>
+                  <div className={`p-4 border-b ${t.border} bg-black/5 flex justify-between items-start`}>
+                    <div>
+                      <span className={`inline-block px-2 py-0.5 rounded text-[10px] font-bold font-mono ${t.bgAccentSoft} ${t.textAccent} border ${t.borderAccentSoft} mb-2`}>REF: {item.referencia}</span>
+                      <h3 className={`font-bold ${t.textPrimary} text-base leading-tight`}>{item.cliente}</h3>
+                      <p className={`text-xs ${t.textSecondary} mt-1 font-mono`}>Prod: {item.id_produto}</p>
+                    </div>
+                    <div className="text-right">
+                      <span className={`block text-2xl font-bold font-mono ${t.textPrimary}`}>{Number(item.quantidade).toLocaleString('pt-BR')}</span>
+                      <span className={`text-[10px] uppercase font-bold ${t.textSecondary}`}>Caixas</span>
+                    </div>
+                  </div>
+                  <div className="p-4 bg-black/20 text-xs">
+                    <div className="grid grid-cols-2 gap-y-3 gap-x-2">
+                      <div>
+                        <span className={`block text-[10px] ${t.textSecondary} uppercase mb-0.5`}>Dimensões (C x L x A)</span>
+                        <span className={`font-medium ${t.textPrimary}`}>{item.comp} x {item.larg} x {item.alt}</span>
+                      </div>
+                      <div>
+                        <span className={`block text-[10px] ${t.textSecondary} uppercase mb-0.5`}>Especificações</span>
+                        <span className={`font-medium ${t.textPrimary}`}>{item.onda} {item.qualidade} {item.gramatura}</span>
+                      </div>
+                      <div>
+                        <span className={`block text-[10px] ${t.textSecondary} uppercase mb-0.5`}>Peso Total</span>
+                        <span className={`font-medium ${t.textAccent} font-mono`}>{formatarKg(item.peso_total)} kg</span>
+                      </div>
+                      <div>
+                        <span className={`block text-[10px] ${t.textSecondary} uppercase mb-0.5`}>Valor Estimado</span>
+                        <span className={`font-medium ${t.textPrimary} font-mono`}>R$ {(item.valor_total || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              ))}
+
+              {estoqueFiltrado.length === 0 && !carregando && (
+                <div className={`col-span-full p-12 text-center ${t.card} rounded-2xl border ${t.border} shadow-sm`}>
+                  <svg className={`w-16 h-16 mx-auto mb-4 ${t.textSecondary} opacity-50`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4" />
+                  </svg>
+                  <h3 className={`text-xl font-bold ${t.textPrimary} mb-2`}>Nenhum estoque encontrado</h3>
+                  <p className={`${t.textSecondary}`}>As sobras de produção aparecerão aqui assim que as Notas Fiscais forem emitidas.</p>
+                </div>
+              )}
+            </div>
+
+            {estoque.length > limiteExibicao && (
+              <div className="flex justify-center pt-4">
+                <button
+                  onClick={() => setLimiteExibicao(prev => prev + 20)}
+                  className={`px-6 py-2.5 rounded-full border ${t.border} ${t.card} ${t.textSecondary} hover:${t.textPrimary} hover:border-[#5DD62C]/30 text-sm font-bold transition-all shadow-sm`}
+                >
+                  Carregar Mais Caixas ({estoque.length - limiteExibicao} restantes)
+                </button>
+              </div>
+            )}
           </div>
         )}
 
