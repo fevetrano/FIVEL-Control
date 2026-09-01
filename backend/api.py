@@ -5,18 +5,17 @@ import traceback
 import threading
 import time
 from datetime import date, datetime
-
+import requests
 # pyrefly: ignore [missing-import]
 from dotenv import load_dotenv
-
 # pyrefly: ignore [missing-import]
 import fdb
 from flask import Flask, jsonify, request
 from flask_cors import CORS
 
 # --- CARREGA O CAMINHO ABSOLUTO DA DLL E SUAS DEPENDÊNCIAS ---
-caminho_dll = os.path.abspath("fbclient.dll")
-
+BASE_DIR = os.path.abspath(os.path.dirname(__file__))
+caminho_dll = os.path.join(BASE_DIR, "fbclient.dll")
 if hasattr(os, "add_dll_directory"):
     try:
         os.add_dll_directory(os.path.dirname(caminho_dll))
@@ -28,7 +27,8 @@ try:
 except Exception as e:
     print(f"Aviso ao carregar DLL do Firebird: {e}")
 
-load_dotenv()
+env_path = os.path.join(BASE_DIR, ".env")
+load_dotenv(dotenv_path=env_path)
 app = Flask(__name__)
 CORS(app)
 
@@ -73,7 +73,26 @@ def init_sqlite_db():
             CREATE TABLE IF NOT EXISTS orcamento_notas (
                 id_orcamento TEXT PRIMARY KEY,
                 anotacao TEXT NOT NULL,
-                data_atualizacao TEXT NOT NULL
+                data_atualizacao TEXT NOT NULL,
+                status TEXT DEFAULT 'Em Aberto'
+            )
+        """)
+
+        try:
+            cur.execute("ALTER TABLE orcamento_notas ADD COLUMN status TEXT DEFAULT 'Em Aberto'")
+        except sqlite3.OperationalError:
+            pass
+
+
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS clientes_geolocalizacao (
+                id_cliente INTEGER PRIMARY KEY,
+                endereco_consultado TEXT,
+                latitude REAL NOT NULL,
+                longitude REAL NOT NULL,
+                place_id TEXT,
+                origem TEXT,
+                data_atualizacao TEXT
             )
         """)
 
@@ -193,6 +212,7 @@ def get_db_connection():
         password=os.getenv("FIREBIRD_PASSWORD"),
         port=int(os.getenv("FIREBIRD_PORT", 3050)),
         charset="NONE",
+        fb_library_name=caminho_dll
     )
 
 
@@ -213,7 +233,7 @@ def build_of_db_status_map(cur):
         return _of_status_cache
 
     cur.execute("""
-        SELECT co.ID_NUMOF, c.STATUS, c.DATA_RECEBIDA
+        SELECT co.ID_NUMOF, c.STATUS, c.DATA_RECEBIDA, c.ID_ORDCOMPRA
         FROM OC_CHAPA_OF co
         JOIN OC_CHAPA c ON co.ID_ORDCOMPRA = c.ID_ORDCOMPRA
     """)
@@ -225,13 +245,15 @@ def build_of_db_status_map(cur):
         id_of = str(row[0])
         status_oc = limpar_texto(row[1]).upper()
         data_rec = row[2]
+        id_compra = row[3]
         is_recebida = status_oc == "RECEBIDA" or data_rec is not None
 
         if id_of not in of_status_db:
-            of_status_db[id_of] = "Produção" if is_recebida else "Compras"
+            of_status_db[id_of] = {"status": "Produção" if is_recebida else "Compras", "id_compra": id_compra}
         else:
             if not is_recebida:
-                of_status_db[id_of] = "Compras"
+                of_status_db[id_of]["status"] = "Compras"
+                of_status_db[id_of]["id_compra"] = id_compra
 
     _of_status_cache = of_status_db
     _of_status_cache_time = agora
@@ -274,8 +296,7 @@ def format_date_safe(dt):
 # --- ROTAS DA API ---
 
 
-@app.route("/api/pedidos", methods=["GET"])
-def obter_pedidos():
+def get_pedidos_processados(ordenar_por="id_pedido", ordem="desc"):
     conn = None
     try:
         conn = get_db_connection()
@@ -290,10 +311,11 @@ def obter_pedidos():
         query = """
             SELECT 
                 p.ID_NUMPED AS ID_PEDIDO, p.PEDIDO_CLIENTE, p.EMISSAO, p.DATA_ENTREGA AS PRAZO_PEDIDO, p.ID_EMPRESA,
-                p.TOTAL_PESO AS PESO_TOTAL_PEDIDO, p.TOTAL_GERAL, c.NOME AS CLIENTE_RAZAO,
+                p.TOTAL_PESO AS PESO_TOTAL_PEDIDO, p.TOTAL_GERAL, c.ID_CLIENTE, c.NOME AS CLIENTE_RAZAO,
                 COALESCE(c.GUERRA, c.NOME) AS CLIENTE_FANTASIA, COALESCE(NULLIF(TRIM(c.ENT_CIDADE), ''), c.CIDADE) AS CIDADE,
                 COALESCE(NULLIF(TRIM(c.ENT_ENDERECO), ''), c.ENDERECO) AS ENDERECO,
                 COALESCE(c.ENT_NUMERO, c.NUMERO) AS NUMERO, COALESCE(NULLIF(TRIM(c.ENT_BAIRRO), ''), c.BAIRRO) AS BAIRRO,
+                COALESCE(NULLIF(TRIM(c.ENT_CEP), ''), c.CEP) AS CEP,
                 i.ID_PRODUTO, i.REFERENCIA, i.QUANT AS QTD_ITEM_TOTAL, i.PESO_TOT AS PESO_ITEM_TOTAL,
                 i.VLUNIT AS PRECO_UNITARIO, i.FECHA,
                 o.ID_NUMOF, o.QTDPROG AS QTD_OF_PROG, o.DTPROG AS DTPROG_OF,
@@ -355,6 +377,8 @@ def obter_pedidos():
                     limpar_texto(row.get("endereco")),
                     str(row.get("numero") or ""),
                     limpar_texto(row.get("bairro")),
+                    limpar_texto(row.get("cidade")),
+                    limpar_texto(row.get("cep")),
                 ]
                 endereco_comp = ", ".join([p for p in partes_end if p])
                 cliente_final = (
@@ -369,8 +393,10 @@ def obter_pedidos():
                     "id_empresa": row.get("id_empresa"),
                     "pedido_cliente": limpar_texto(row.get("pedido_cliente")),
                     "cliente": cliente_final,
+                    "id_cliente": row.get("id_cliente"),
                     "cidade_bloco": limpar_texto(row.get("cidade")),
                     "endereco_completo": endereco_comp,
+                    "cep": limpar_texto(row.get("cep")),
                     "data_emissao": data_emissao_formatada,
                     "raw_emissao": raw_emissao_str,
                     "data_entrega": "",
@@ -423,7 +449,9 @@ def obter_pedidos():
                 of_local.get("qtd_produzida") if isinstance(of_local, dict) else None
             )
 
-            status_banco = of_status_db.get(id_of_str)
+            status_banco_dict = of_status_db.get(id_of_str) or {}
+            status_banco = status_banco_dict.get("status") if isinstance(status_banco_dict, dict) else status_banco_dict
+            id_ordcompra = status_banco_dict.get("id_compra") if isinstance(status_banco_dict, dict) else None
 
             status_of = obter_status_final_of(
                 status_manual, status_banco, is_faturada_total, is_faturada_parcial
@@ -505,6 +533,7 @@ def obter_pedidos():
                     "comp": row.get("comp"),
                     "larg": row.get("larg"),
                     "alt": row.get("alt"),
+                    "id_compra": id_ordcompra,
                 }
             )
 
@@ -539,6 +568,7 @@ def obter_pedidos():
 
             # Mantém em RAW float para exibir as decimais exatas no Frontend
             pedido["peso_total_kg"] = peso_aberto_pedido
+            pedido["peso_total_pedido_bruto"] = float(row.get("peso_total_pedido") or 0.0)
             pedido["faturamento_total"] = valor_aberto_pedido
             pedido["total_itens_abertos"] = itens_ativos_pedido
 
@@ -564,8 +594,6 @@ def obter_pedidos():
 
             lista_pedidos.append(pedido)
 
-        ordenar_por = request.args.get("ordenar_por", "id_pedido").lower()
-        ordem = request.args.get("ordem", "desc").lower()
         rev = ordem == "desc"
 
         if ordenar_por in ["id_pedido", "id", "numero"]:
@@ -582,15 +610,118 @@ def obter_pedidos():
                 reverse=rev,
             )
 
+        return lista_pedidos
+
+    except Exception as e:
+        traceback.print_exc()
+        raise e
+    finally:
+        if conn:
+            conn.close()
+
+@app.route("/api/pedidos", methods=["GET"])
+def obter_pedidos():
+    try:
+        ordenar_por = request.args.get("ordenar_por", "id_pedido").lower()
+        ordem = request.args.get("ordem", "desc").lower()
+        lista_pedidos = get_pedidos_processados(ordenar_por, ordem)
         return jsonify(lista_pedidos), 200
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"erro": str(e)}), 500
+
+
+@app.route("/api/calendario_pesos", methods=["GET"])
+def obter_calendario_pesos():
+    conn = None
+    try:
+        mes_param = request.args.get("mes")
+        ano_param = request.args.get("ano")
+        if not mes_param or not ano_param:
+            hoje = datetime.now()
+            mes_param = hoje.month
+            ano_param = hoje.year
+
+        mes = int(mes_param)
+        ano = int(ano_param)
+
+        data_inicio_mes = datetime(ano, mes, 1).date()
+
+        if mes == 1:
+            mes_anterior = 12
+            ano_anterior = ano - 1
+        else:
+            mes_anterior = mes - 1
+            ano_anterior = ano
+
+        conn = get_db_connection()
+        cur = conn.cursor()
+        
+        cur.execute(
+            """SELECT COALESCE(SUM(OI_BRUTO), 0) FROM FISCAL 
+               WHERE EMISS_ANO = ? AND EMISS_MES = ? AND ID_EMPRESA IN (1, 2) 
+                 AND (CANCELADA IS NULL OR CANCELADA <> 'S') 
+                 AND (IGNORAR_PESO IS NULL OR IGNORAR_PESO <> 'S')""",
+            (ano_anterior, mes_anterior),
+        )
+        peso_nfs = float(cur.fetchone()[0] or 0.0)
+
+        cur.execute(
+            """SELECT COALESCE(SUM(pfi.PESOTOTAL), 0)
+               FROM RECEBIMENTOS r
+               JOIN PFITEM pfi ON pfi.ID_PF = r.ID_PF AND pfi.ID_EMPRESA = r.ID_EMPRESA
+               WHERE EXTRACT(YEAR FROM r.EMISSAO) = ? 
+                 AND EXTRACT(MONTH FROM r.EMISSAO) = ?
+                 AND r.ID_EMPRESA IN (1, 2)
+                 AND r.TIPOREC = 'RECIBO'
+                 AND (r.CONTABILIZA IS NULL OR r.CONTABILIZA = 'S')""",
+            (ano_anterior, mes_anterior),
+        )
+        peso_recs = float(cur.fetchone()[0] or 0.0)
+        
+        peso_saida_anterior = peso_nfs + peso_recs
+        conn.close()
+
+        lista_pedidos = get_pedidos_processados()
+        
+        backlog_anterior_kg = 0.0
+        entrada_mes_kg = 0.0
+        dias_calendario = {str(dia): 0.0 for dia in range(1, 32)}
+
+        for pedido in lista_pedidos:
+            raw_emissao = pedido.get("raw_emissao")
+            if not raw_emissao:
+                continue
+
+            try:
+                dt_emissao = datetime.strptime(raw_emissao, "%Y-%m-%d").date()
+            except ValueError:
+                continue
+
+            if dt_emissao < data_inicio_mes:
+                peso_aberto = pedido.get("peso_total_kg", 0.0)
+                if pedido.get("status") != "Faturada" and peso_aberto > 0:
+                    backlog_anterior_kg += peso_aberto
+            elif dt_emissao.month == mes and dt_emissao.year == ano:
+                peso_bruto = pedido.get("peso_total_pedido_bruto", 0.0)
+                entrada_mes_kg += peso_bruto
+                dias_calendario[str(dt_emissao.day)] += peso_bruto
+
+        return jsonify({
+            "saida_mes_anterior_kg": peso_saida_anterior,
+            "backlog_anterior_kg": backlog_anterior_kg,
+            "entrada_mes_kg": entrada_mes_kg,
+            "dias_calendario": dias_calendario,
+            "mes": mes,
+            "ano": ano
+        }), 200
 
     except Exception as e:
         traceback.print_exc()
         return jsonify({"erro": str(e)}), 500
     finally:
-        if conn:
+        if conn and not conn.closed:
             conn.close()
-
 
 @app.route("/api/orcamentos", methods=["GET"])
 def obter_orcamentos():
@@ -604,12 +735,13 @@ def obter_orcamentos():
             sqlite_conn = get_sqlite_conn()
             scur = sqlite_conn.cursor()
             scur.execute(
-                "SELECT id_orcamento, anotacao, data_atualizacao FROM orcamento_notas"
+                "SELECT id_orcamento, anotacao, data_atualizacao, status FROM orcamento_notas"
             )
             for row in scur.fetchall():
                 notas_locais[str(row[0])] = {
                     "anotacao": row[1],
                     "data_atualizacao": row[2],
+                    "status": row[3] if row[3] else 'Em Aberto'
                 }
             sqlite_conn.close()
 
@@ -660,6 +792,7 @@ def obter_orcamentos():
                     "total_peso": float(row.get("total_peso") or 0.0),
                     "anotacao": nota_local.get("anotacao", ""),
                     "data_anotacao": nota_local.get("data_atualizacao", ""),
+                    "status": nota_local.get("status", "Em Aberto"),
                     "itens": [],
                 }
 
@@ -692,25 +825,59 @@ def obter_orcamentos():
             conn.close()
 
 
-@app.route("/api/orcamentos/<int:id_orcamento>/nota", methods=["PUT"])
-def salvar_nota_orcamento(id_orcamento):
+@app.route("/api/orcamentos/<id_orcamento>/nota", methods=["PUT"])
+def atualizar_nota_orcamento(id_orcamento):
     try:
-        dados = request.get_json() or {}
+        dados = request.json
         nova_nota = dados.get("anotacao", "")
         agora = datetime.now().strftime("%d/%m/%Y %H:%M")
 
         with db_lock:
             conn = get_sqlite_conn()
             cur = conn.cursor()
+            
+            cur.execute("SELECT status FROM orcamento_notas WHERE id_orcamento = ?", (id_orcamento,))
+            row = cur.fetchone()
+            status_atual = row[0] if row else 'Em Aberto'
+            
             cur.execute(
-                "INSERT OR REPLACE INTO orcamento_notas (id_orcamento, anotacao, data_atualizacao) VALUES (?, ?, ?)",
-                (str(id_orcamento), nova_nota, agora),
+                "INSERT OR REPLACE INTO orcamento_notas (id_orcamento, anotacao, data_atualizacao, status) VALUES (?, ?, ?, ?)",
+                (id_orcamento, nova_nota, agora, status_atual),
             )
             conn.commit()
             conn.close()
 
-        return jsonify({"sucesso": True, "data_atualizacao": agora}), 200
+        return jsonify({"mensagem": "Nota atualizada", "data_atualizacao": agora}), 200
     except Exception as e:
+        traceback.print_exc()
+        return jsonify({"erro": str(e)}), 500
+
+@app.route("/api/orcamentos/<id_orcamento>/status", methods=["PUT"])
+def atualizar_status_orcamento(id_orcamento):
+    try:
+        dados = request.json
+        novo_status = dados.get("status", "Em Aberto")
+        agora = datetime.now().strftime("%d/%m/%Y %H:%M")
+
+        with db_lock:
+            conn = get_sqlite_conn()
+            cur = conn.cursor()
+            
+            cur.execute("SELECT anotacao, data_atualizacao FROM orcamento_notas WHERE id_orcamento = ?", (id_orcamento,))
+            row = cur.fetchone()
+            anotacao_atual = row[0] if row else ""
+            data_atualizacao_atual = row[1] if row else agora
+            
+            cur.execute(
+                "INSERT OR REPLACE INTO orcamento_notas (id_orcamento, anotacao, data_atualizacao, status) VALUES (?, ?, ?, ?)",
+                (id_orcamento, anotacao_atual, data_atualizacao_atual, novo_status),
+            )
+            conn.commit()
+            conn.close()
+
+        return jsonify({"mensagem": "Status atualizado", "novo_status": novo_status}), 200
+    except Exception as e:
+        traceback.print_exc()
         return jsonify({"erro": str(e)}), 500
 
 
@@ -727,7 +894,7 @@ def obter_compras():
         query = """
             SELECT 
                 c.ID_ORDCOMPRA, c.EMISSAO, c.DATA_ENTREGA, c.NOME_FORNECEDOR, c.TOTAL_KG, c.TOTAL_GERAL, c.STATUS, c.DATA_RECEBIDA,
-                ci.ITEM, ci.QUANT AS QUANT_CHAPA, ci.PESO AS PESO_CHAPA, ci.VLTOT, co.ID_NUMOF, co.NOME AS CLIENTE, co.QUANT AS QUANT_OF,
+                ci.ITEM, ci.QUANT AS QUANT_CHAPA, ci.PESO AS PESO_CHAPA, (ci.QUANT * COALESCE(ci.PR_FL, 0)) AS VLTOT, ci.LARG, ci.COMP, co.ID_NUMOF, co.NOME AS CLIENTE, co.QUANT AS QUANT_OF,
                 p.REFERENCIA, p.FECHA
             FROM OC_CHAPA c
             LEFT JOIN OC_CHAPA_ITEM ci ON c.ID_ORDCOMPRA = ci.ID_ORDCOMPRA
@@ -770,11 +937,14 @@ def obter_compras():
                 if id_item_str not in compras_map[id_compra]["itens_map"]:
                     peso_chapa = float(row.get("peso_chapa") or 0.0)
                     vltot_item = float(row.get("vltot") or 0.0)
+                    larg = row.get("larg") or 0
+                    comp = row.get("comp") or 0
                     compras_map[id_compra]["itens_map"][id_item_str] = {
                         "item": id_item,
                         "quantidadeChapa": float(row.get("quant_chapa") or 0.0),
                         "pesoChapa": peso_chapa,
                         "vltot": vltot_item,
+                        "medida": f"{larg}x{comp} mm",
                         "ofs": [],
                     }
                     compras_map[id_compra]["soma_itens_kg"] += peso_chapa
@@ -786,7 +956,8 @@ def obter_compras():
                     status_manual = (
                         of_local.get("status") if isinstance(of_local, dict) else None
                     )
-                    status_banco = of_status_db.get(id_of_str)
+                    status_banco_dict = of_status_db.get(id_of_str) or {}
+                    status_banco = status_banco_dict.get("status") if isinstance(status_banco_dict, dict) else status_banco_dict
 
                     status_of = obter_status_final_of(
                         status_manual, status_banco, False, False
@@ -1085,7 +1256,7 @@ def obter_ft(id_ft):
     try:
         conn = get_db_connection()
         cur = conn.cursor()
-
+        
         id_ft_int = int(id_ft) if id_ft.isdigit() else -1
 
         query = """
@@ -1098,7 +1269,7 @@ def obter_ft(id_ft):
         """
         cur.execute(query, (id_ft_int, id_ft))
         row = cur.fetchone()
-
+        
         if row:
             colunas = [desc[0].lower() for desc in cur.description]
             dados = dict(zip(colunas, row))
@@ -1111,7 +1282,7 @@ def obter_ft(id_ft):
             return jsonify(dados), 200
         else:
             return jsonify({"erro": "FT não encontrada"}), 404
-
+            
     except Exception as e:
         traceback.print_exc()
         return jsonify({"erro": str(e)}), 500
@@ -1126,33 +1297,45 @@ def gerenciar_estoque():
         try:
             dados = request.get_json() or {}
             agora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
+            acao = dados.get("acao", "novo")
+            id_ft = str(dados.get("id_ft_principal", ""))
+            qtd_input = float(dados.get("quantidade", 0.0) or 0.0)
+            
             with db_lock:
                 conn = get_sqlite_conn()
                 cur = conn.cursor()
-                cur.execute(
-                    """
+                
+                if acao in ["somar", "substituir"]:
+                    cur.execute("SELECT id_estoque, quantidade FROM estoque_manual WHERE id_ft_principal = ?", (id_ft,))
+                    row = cur.fetchone()
+                    if row:
+                        id_estoque = row[0]
+                        nova_qtd = (float(row[1]) + qtd_input) if acao == "somar" else qtd_input
+                        cur.execute("UPDATE estoque_manual SET quantidade = ? WHERE id_estoque = ?", (nova_qtd, id_estoque))
+                        conn.commit()
+                        conn.close()
+                        return jsonify({"sucesso": True, "acao": "atualizado", "nova_quantidade": nova_qtd}), 200
+
+                cur.execute("""
                     INSERT INTO estoque_manual (
                         id_ft_principal, referencia, peso_conjunto, preco_conjunto,
                         id_qualidfab, id_ondafab, nome_cliente, gramatura, quantidade, data_criacao
                     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                    (
-                        str(dados.get("id_ft_principal", "")),
-                        dados.get("referencia", ""),
-                        float(dados.get("peso_conjunto", 0.0) or 0.0),
-                        float(dados.get("preco_conjunto", 0.0) or 0.0),
-                        dados.get("id_qualidfab", ""),
-                        dados.get("id_ondafab", ""),
-                        dados.get("nome_cliente", ""),
-                        dados.get("gramatura", ""),
-                        float(dados.get("quantidade", 0.0) or 0.0),
-                        agora,
-                    ),
-                )
+                """, (
+                    id_ft,
+                    dados.get("referencia", ""),
+                    float(dados.get("peso_conjunto", 0.0) or 0.0),
+                    float(dados.get("preco_conjunto", 0.0) or 0.0),
+                    dados.get("id_qualidfab", ""),
+                    dados.get("id_ondafab", ""),
+                    dados.get("nome_cliente", ""),
+                    dados.get("gramatura", ""),
+                    qtd_input,
+                    agora
+                ))
                 conn.commit()
                 conn.close()
-            return jsonify({"sucesso": True}), 201
+            return jsonify({"sucesso": True, "acao": "inserido"}), 201
         except Exception as e:
             traceback.print_exc()
             return jsonify({"erro": str(e)}), 500
@@ -1166,39 +1349,443 @@ def gerenciar_estoque():
             colunas = [desc[0] for desc in cur.description]
             registros = [dict(zip(colunas, row)) for row in cur.fetchall()]
             conn.close()
-
+            
         estoque_formatado = []
         for r in registros:
-            estoque_formatado.append(
-                {
-                    "id_estoque": r.get("id_estoque"),
-                    "id_produto": r.get("id_ft_principal"),
-                    "referencia": r.get("referencia"),
-                    "cliente": r.get("nome_cliente"),
-                    "quantidade": r.get("quantidade"),
-                    "onda": r.get("id_ondafab"),
-                    "qualidade": r.get("id_qualidfab"),
-                    "gramatura": r.get("gramatura"),
-                    "peso_total": (
-                        float(r.get("peso_conjunto") or 0.0)
-                        * float(r.get("quantidade") or 0.0)
-                    ),
-                    "valor_total": (
-                        float(r.get("preco_conjunto") or 0.0)
-                        * float(r.get("quantidade") or 0.0)
-                    ),
-                    "comp": "-",
-                    "larg": "-",
-                    "alt": "-",
-                    "is_manual": True,
-                }
-            )
-
+            estoque_formatado.append({
+                "id_estoque": r.get("id_estoque"),
+                "id_produto": r.get("id_ft_principal"),
+                "referencia": r.get("referencia"),
+                "cliente": r.get("nome_cliente"),
+                "quantidade": r.get("quantidade"),
+                "onda": r.get("id_ondafab"),
+                "qualidade": r.get("id_qualidfab"),
+                "gramatura": r.get("gramatura"),
+                "peso_total": (float(r.get("peso_conjunto") or 0.0) * float(r.get("quantidade") or 0.0)),
+                "valor_total": (float(r.get("preco_conjunto") or 0.0) * float(r.get("quantidade") or 0.0)),
+                "comp": "-", "larg": "-", "alt": "-",
+                "is_manual": True
+            })
+            
         return jsonify(estoque_formatado), 200
     except Exception as e:
         traceback.print_exc()
         return jsonify({"erro": str(e)}), 500
 
+@app.route("/api/estoque/<int:id_estoque>", methods=["PUT"])
+def editar_estoque(id_estoque):
+    try:
+        dados = request.get_json() or {}
+        acao = dados.get("acao", "substituir")
+        qtd_input = float(dados.get("quantidade", 0.0) or 0.0)
+        
+        with db_lock:
+            conn = get_sqlite_conn()
+            cur = conn.cursor()
+            
+            nova_qtd = qtd_input
+            if acao == "somar":
+                cur.execute("SELECT quantidade FROM estoque_manual WHERE id_estoque = ?", (id_estoque,))
+                row = cur.fetchone()
+                if row:
+                    nova_qtd = float(row[0]) + qtd_input
+
+            cur.execute("""
+                UPDATE estoque_manual SET
+                    referencia = ?, peso_conjunto = ?, preco_conjunto = ?,
+                    id_qualidfab = ?, id_ondafab = ?, nome_cliente = ?, gramatura = ?, quantidade = ?
+                WHERE id_estoque = ?
+            """, (
+                dados.get("referencia", ""),
+                float(dados.get("peso_conjunto", 0.0) or 0.0),
+                float(dados.get("preco_conjunto", 0.0) or 0.0),
+                dados.get("id_qualidfab", ""),
+                dados.get("id_ondafab", ""),
+                dados.get("nome_cliente", ""),
+                dados.get("gramatura", ""),
+                nova_qtd,
+                id_estoque
+            ))
+            conn.commit()
+            conn.close()
+        return jsonify({"sucesso": True}), 200
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"erro": str(e)}), 500
+
+
+@app.route("/api/estoque/<int:id_estoque>", methods=["DELETE"])
+def deletar_estoque(id_estoque):
+    try:
+        with db_lock:
+            conn = get_sqlite_conn()
+            cur = conn.cursor()
+            cur.execute("DELETE FROM estoque_manual WHERE id_estoque = ?", (id_estoque,))
+            conn.commit()
+            conn.close()
+        return jsonify({"sucesso": True}), 200
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"erro": str(e)}), 500
+
+
+@app.route("/api/geocode", methods=["GET"])
+def geocode_cliente():
+    id_cliente = request.args.get("id_cliente")
+    endereco_completo = request.args.get("endereco")
+    
+    if not id_cliente or not endereco_completo:
+        return jsonify({"erro": "id_cliente e endereco sao obrigatorios"}), 400
+        
+    try:
+        # Check SQLite Cache
+        with db_lock:
+            conn = get_sqlite_conn()
+            cur = conn.cursor()
+            cur.execute("SELECT latitude, longitude FROM clientes_geolocalizacao WHERE id_cliente = ?", (id_cliente,))
+            row = cur.fetchone()
+            if row:
+                conn.close()
+                return jsonify({"lat": row[0], "lng": row[1], "cached": True}), 200
+            
+        # Not in cache, call Google Maps
+        api_key = os.getenv("GOOGLE_MAPS_API_KEY")
+        if not api_key:
+            if conn: conn.close()
+            return jsonify({"erro": "API Key nao configurada"}), 500
+            
+        url = f"https://maps.googleapis.com/maps/api/geocode/json"
+        params = {
+            "address": endereco_completo,
+            "components": "country:BR",
+            "key": api_key
+        }
+        resp = requests.get(url, params=params)
+        data = resp.json()
+        
+        if data.get("status") == "OK" and len(data.get("results", [])) > 0:
+            result = data["results"][0]
+            lat = result["geometry"]["location"]["lat"]
+            lng = result["geometry"]["location"]["lng"]
+            place_id = result.get("place_id", "")
+            origem = result["geometry"].get("location_type", "GOOGLE")
+            
+            # Save to cache
+            agora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            with db_lock:
+                cur.execute("""
+                    INSERT OR REPLACE INTO clientes_geolocalizacao 
+                    (id_cliente, endereco_consultado, latitude, longitude, place_id, origem, data_atualizacao)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                """, (id_cliente, endereco_completo, lat, lng, place_id, origem, agora))
+                conn.commit()
+                conn.close()
+                
+            return jsonify({"lat": lat, "lng": lng, "cached": False}), 200
+        else:
+            print(f"DEBUG: Geocode Google falhou: {data}. Tentando Nominatim...")
+            try:
+                nom_url = "https://nominatim.openstreetmap.org/search"
+                nom_params = {"q": endereco_completo, "format": "json", "limit": 1}
+                nom_headers = {"User-Agent": "FivelControl/1.0"}
+                nom_resp = requests.get(nom_url, params=nom_params, headers=nom_headers)
+                nom_data = nom_resp.json()
+                
+                if isinstance(nom_data, list) and len(nom_data) > 0:
+                    result = nom_data[0]
+                    lat = float(result["lat"])
+                    lng = float(result["lon"])
+                    place_id = str(result.get("place_id", ""))
+                    origem = "NOMINATIM"
+                    
+                    agora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    with db_lock:
+                        cur.execute("""
+                            INSERT OR REPLACE INTO clientes_geolocalizacao 
+                            (id_cliente, endereco_consultado, latitude, longitude, place_id, origem, data_atualizacao)
+                            VALUES (?, ?, ?, ?, ?, ?, ?)
+                        """, (id_cliente, endereco_completo, lat, lng, place_id, origem, agora))
+                        conn.commit()
+                        conn.close()
+                    return jsonify({"lat": lat, "lng": lng, "cached": False}), 200
+                else:
+                    print(f"DEBUG: Nominatim falhou. Tentando BrasilAPI via CEP...")
+                    import re
+                    cep_match = re.search(r'\b\d{5}-?\d{3}\b', endereco_completo)
+                    if cep_match:
+                        cep = cep_match.group(0).replace('-', '')
+                        b_url = f"https://brasilapi.com.br/api/cep/v2/{cep}"
+                        b_resp = requests.get(b_url, timeout=5)
+                        if b_resp.status_code == 200:
+                            b_data = b_resp.json()
+                            if "location" in b_data and "coordinates" in b_data["location"]:
+                                coords = b_data["location"]["coordinates"]
+                                if coords.get("latitude") and coords.get("longitude"):
+                                    lat = float(coords["latitude"])
+                                    lng = float(coords["longitude"])
+                                    place_id = b_data.get("cep", "")
+                                    origem = "BRASILAPI"
+                                    
+                                    agora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                                    with db_lock:
+                                        cur.execute("""
+                                            INSERT OR REPLACE INTO clientes_geolocalizacao 
+                                            (id_cliente, endereco_consultado, latitude, longitude, place_id, origem, data_atualizacao)
+                                            VALUES (?, ?, ?, ?, ?, ?, ?)
+                                        """, (id_cliente, endereco_completo, lat, lng, place_id, origem, agora))
+                                        conn.commit()
+                                        conn.close()
+                                    return jsonify({"lat": lat, "lng": lng, "cached": False}), 200
+            except Exception as ex_nom:
+                print(f"ERRO nos fallbacks de geocode: {str(ex_nom)}")
+                
+            if conn:
+                conn.close()
+            return jsonify({"erro": "Nao foi possivel geolocalizar o endereco"}), 500
+    except Exception as e:
+        print(f"ERRO no geocode: {str(e)}")
+        if conn:
+            conn.close()
+        traceback.print_exc()
+        return jsonify({"erro": str(e)}), 500
+
+@app.route("/api/rastreamento", methods=["GET"])
+def obter_rastreamento():
+    try:
+        numero_romaneio = request.args.get("numero")
+        if not numero_romaneio:
+            return jsonify({"erro": "Numero do romaneio nao fornecido"}), 400
+
+        conn = None
+        cur = None
+        with db_lock:
+            conn = get_sqlite_conn()
+            cur = conn.cursor()
+            
+            # 1. BuscarПеdidios
+            cur.execute("""
+                SELECT id_pedido, status
+                FROM pedidos
+                WHERE numero_romaneio = ?
+            """, (numero_romaneio,))
+            pedidos = [{"id": r[0], "status": r[1]} for r in cur.fetchall()]
+
+            # 2. Buscar OFs
+            cur.execute("""
+                SELECT id_of, status
+                FROM ofs
+                WHERE numero_romaneio = ?
+            """, (numero_romaneio,))
+            ofs = [{"id": r[0], "status": r[1]} for r in cur.fetchall()]
+
+            # 3. Buscar Categ_compras
+            cur.execute("""
+                SELECT id_compra, status
+                FROM categ_compras
+                WHERE numero_romaneio = ?
+            """, (numero_romaneio,))
+            compras = [{"id": r[0], "status": r[1]} for r in cur.fetchall()]
+
+            # 4. Buscar Estoque_manual
+            cur.execute("""
+                SELECT id_estoque, status
+                FROM estoque_manual
+                WHERE numero_romaneio = ?
+            """, (numero_romaneio,))
+            estoques = [{"id": r[0], "status": r[1]} for r in cur.fetchall()]
+
+        # 5. Buscar Estoque_auto
+        estoque_auto = []
+        cur.execute("""
+            SELECT id_ft_principal, cliente, quantidade, data_criacao
+            FROM estoque_auto
+            WHERE numero_romaneio = ?
+        """, (numero_romaneio,))
+        rows_auto = cur.fetchall()
+        
+        colunas_auto = [desc[0] for desc in cur.description]
+        for row in rows_auto:
+            d = dict(zip(colunas_auto, row))
+            # Formatar para o padrão desejado
+            estoque_auto.append({
+                "id_estoque": d.get("id_estoque"),
+                "cliente": d.get("cliente"),
+                "quantidade": d.get("quantidade"),
+                "data_criacao": d.get("data_criacao")
+            })
+
+        # Montar resposta
+        hoje = datetime.now()
+        return jsonify(
+            {
+                "numero_romaneio": numero_romaneio,
+                "componentes": {
+                    "pedidos": pedidos,
+                    "ofs": ofs,
+                    "compras_recebidas": compras,
+                    "estoque_manual": estoques,
+                    "estoque_automatico": estoque_auto,
+                    "total_nfs_mes": len(compras) + len(estoques)
+                },
+                "mes_referencia": f"{hoje.month:02d}/{hoje.year}",
+            }
+        ), 200
+    except Exception as e:
+        return jsonify({"erro": str(e)}), 500
+    finally:
+        if conn:
+            conn.close()
+
+
+def decode_polyline(polyline_str):
+    index, lat, lng = 0, 0, 0
+    coordinates = []
+    changes = {'latitude': 0, 'longitude': 0}
+    while index < len(polyline_str):
+        for unit in ['latitude', 'longitude']:
+            shift, result = 0, 0
+            while True:
+                byte = ord(polyline_str[index]) - 63
+                index += 1
+                result |= (byte & 0x1f) << shift
+                shift += 5
+                if not byte >= 0x20:
+                    break
+            if (result & 1):
+                changes[unit] = ~(result >> 1)
+            else:
+                changes[unit] = (result >> 1)
+        lat += changes['latitude']
+        lng += changes['longitude']
+        coordinates.append([lat / 100000.0, lng / 100000.0])
+    return coordinates
+
+
+@app.route("/api/optimize_route", methods=["POST"])
+def optimize_route():
+    try:
+        body = request.get_json() or {}
+        pedidos = body.get("pedidos", [])
+        
+        if not pedidos:
+            return jsonify({"erro": "Nenhum pedido selecionado"}), 400
+            
+        api_key = os.getenv("GOOGLE_MAPS_API_KEY")
+        if not api_key:
+            return jsonify({"erro": "API Key nao configurada"}), 500
+            
+        # Fabric Coordinates (Ruycepel Embalagens)
+        origem = {
+            "location": {
+                "latLng": {
+                    "latitude": -23.70938551545255,
+                    "longitude": -46.59345608749334
+                }
+            }
+        }
+        
+        waypoints = []
+        for p in pedidos:
+            waypoints.append({
+                "location": {
+                    "latLng": {
+                        "latitude": p["lat"],
+                        "longitude": p["lng"]
+                    }
+                }
+            })
+            
+        # Call Google Routes API
+        url = "https://routes.googleapis.com/directions/v2:computeRoutes"
+        headers = {
+            "Content-Type": "application/json",
+            "X-Goog-Api-Key": api_key,
+            "X-Goog-FieldMask": "routes.optimizedIntermediateWaypointIndex,routes.polyline.encodedPolyline"
+        }
+        payload = {
+            "origin": origem,
+            "destination": origem, # Round trip
+            "intermediates": waypoints,
+            "travelMode": "DRIVE",
+            "routingPreference": "TRAFFIC_AWARE",
+            "optimizeWaypointOrder": True
+        }
+        
+        resp = requests.post(url, headers=headers, json=payload)
+        data = resp.json()
+        
+        if "routes" in data and len(data["routes"]) > 0:
+            route = data["routes"][0]
+            polyline_str = route.get("polyline", {}).get("encodedPolyline", "")
+            waypoint_order = route.get("optimizedIntermediateWaypointIndex", [])
+            
+            if not waypoint_order:
+                waypoint_order = list(range(len(waypoints)))
+                
+            lifo_order = list(reversed(waypoint_order))
+            
+            # Map waypoint indices to actual order IDs
+            pedidos_ids = [p["id"] for p in pedidos]
+            ordem_entregas_ids = [pedidos_ids[i] for i in waypoint_order]
+            lifo_entregas_ids = [pedidos_ids[i] for i in lifo_order]
+            
+            coordenadas = decode_polyline(polyline_str) if polyline_str else []
+            
+            return jsonify({
+                "coordenadas": coordenadas,
+                "ordem_entregas": ordem_entregas_ids,
+                "lifo_entregas": lifo_entregas_ids
+            }), 200
+        else:
+            print("DEBUG: Google Routes failed. Falling back to OSRM...")
+            
+            # Origin coordinates
+            lat_origem = origem['location']['latLng']['latitude']
+            lng_origem = origem['location']['latLng']['longitude']
+            
+            coords_str = f"{lng_origem},{lat_origem}"
+            for p in pedidos:
+                coords_str += f";{p['lng']},{p['lat']}"
+                
+            osrm_url = f"http://router.project-osrm.org/trip/v1/driving/{coords_str}?roundtrip=true&source=first&destination=last&overview=full"
+            osrm_resp = requests.get(osrm_url)
+            osrm_data = osrm_resp.json()
+            
+            if osrm_data.get("code") == "Ok":
+                trip = osrm_data["trips"][0]
+                polyline_str = trip["geometry"]
+                
+                # OSRM returns waypoints in original input order.
+                # Each waypoint has a 'waypoint_index' showing its position in the trip.
+                # We sort the pedidos indices (0..N-1) by their trip position.
+                ordered_pedidos = sorted(
+                    range(len(pedidos)),
+                    key=lambda i: osrm_data["waypoints"][i+1]["waypoint_index"]
+                )
+                waypoint_order = ordered_pedidos
+                
+                if not waypoint_order:
+                    waypoint_order = list(range(len(pedidos)))
+                    
+                lifo_order = list(reversed(waypoint_order))
+                
+                pedidos_ids = [p["id"] for p in pedidos]
+                ordem_entregas_ids = [pedidos_ids[i] for i in waypoint_order]
+                lifo_entregas_ids = [pedidos_ids[i] for i in lifo_order]
+                
+                coordenadas = decode_polyline(polyline_str) if polyline_str else []
+                
+                return jsonify({
+                    "coordenadas": coordenadas,
+                    "ordem_entregas": ordem_entregas_ids,
+                    "lifo_entregas": lifo_entregas_ids
+                }), 200
+            else:
+                return jsonify({"erro": "Nenhuma rota retornada", "detalhes": osrm_data}), 400
+            
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"erro": str(e)}), 500
 
 if __name__ == "__main__":
     app.run(debug=False, host="0.0.0.0", port=5000, threaded=True)

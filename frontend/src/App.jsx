@@ -14,7 +14,7 @@ let DefaultIcon = L.icon({
 });
 L.Marker.prototype.options.icon = DefaultIcon;
 
-const COORDENADAS_EMPRESA = [-23.6939, -46.5650]
+const COORDENADAS_EMPRESA = [-23.70938551545255, -46.59345608749334]
 const API_URL = 'http://192.168.1.34:5000'
 
 function RedimensionarMapa() {
@@ -45,7 +45,7 @@ function App() {
   const [empresaFiltro, setEmpresaFiltro] = useState('total');
 
   const [modalEstoqueAberto, setModalEstoqueAberto] = useState(false);
-  const [ftForm, setFtForm] = useState({ id_ft_principal: '', referencia: '', peso_conjunto: '', preco_conjunto: '', id_qualidfab: '', id_ondafab: '', nome_cliente: '', gramatura: '', quantidade: '' });
+  const [ftForm, setFtForm] = useState({ id_estoque: '', id_ft_principal: '', referencia: '', peso_conjunto: '', preco_conjunto: '', id_qualidfab: '', id_ondafab: '', nome_cliente: '', gramatura: '', quantidade: '', acao: 'novo' });
   const [buscandoFt, setBuscandoFt] = useState(false);
 
   const [resumoMapa, setResumoMapa] = useState({
@@ -71,6 +71,7 @@ function App() {
   const [termoPesquisa, setTermoPesquisa] = useState("");
   const [termoPesquisaProducao, setTermoPesquisaProducao] = useState("");
   const [termoPesquisaOrcamento, setTermoPesquisaOrcamento] = useState("");
+  const [abaOrcamento, setAbaOrcamento] = useState("Em Aberto");
   const [termoPesquisaEstoque, setTermoPesquisaEstoque] = useState("");
 
   const [modalBipadorAberto, setModalBipadorAberto] = useState(false);
@@ -82,8 +83,31 @@ function App() {
   const inputBipadorRef = useRef(null);
   const [pedidosExpandidos, setPedidosExpandidos] = useState([])
   const [comprasExpandidas, setComprasExpandidas] = useState([])
+  const [itensCompraExpandidos, setItensCompraExpandidos] = useState([])
   const [orcamentosExpandidos, setOrcamentosExpandidos] = useState([])
   const [editandoNotaOrcamento, setEditandoNotaOrcamento] = useState(null)
+
+  const [calendarioPesosData, setCalendarioPesosData] = useState({ mes: new Date().getMonth() + 1, ano: new Date().getFullYear(), carregando: false, dados: null });
+  const [modoPesoCalendario, setModoPesoCalendario] = useState('total');
+
+  const carregarCalendarioPesos = useCallback(() => {
+    setCalendarioPesosData(prev => ({ ...prev, carregando: true }));
+    axios.get(`${API_URL}/api/calendario_pesos?mes=${calendarioPesosData.mes}&ano=${calendarioPesosData.ano}`)
+      .then(res => {
+        setCalendarioPesosData(prev => ({ ...prev, carregando: false, dados: res.data }));
+      })
+      .catch(err => {
+        console.error("Erro ao carregar calendario:", err);
+        setCalendarioPesosData(prev => ({ ...prev, carregando: false }));
+      });
+  }, [calendarioPesosData.mes, calendarioPesosData.ano]);
+
+  useEffect(() => {
+    if (abaAtiva === 'calendario') {
+      carregarCalendarioPesos();
+    }
+  }, [abaAtiva, calendarioPesosData.mes, calendarioPesosData.ano, carregarCalendarioPesos]);
+
   const [textoNotaTemp, setTextoNotaTemp] = useState("")
 
   const abortControllerOSRM = useRef(null)
@@ -175,6 +199,16 @@ function App() {
       });
   }
 
+  const atualizarStatusOrcamento = (idOrcamento, novoStatus) => {
+    iniciarAtualizacao();
+    axios.put(`${API_URL}/api/orcamentos/${idOrcamento}/status`, { status: novoStatus })
+      .then(res => {
+        finalizarAtualizacao();
+        setOrcamentos(prev => prev.map(o => o.id_orcamento === idOrcamento ? { ...o, status: novoStatus } : o));
+      })
+      .catch(() => finalizarAtualizacao());
+  }
+
   const handleIdFtBlur = async () => {
     if (!ftForm.id_ft_principal) return;
     setBuscandoFt(true);
@@ -199,12 +233,30 @@ function App() {
     }
   };
 
+  const handleExcluirEstoque = async (id_estoque) => {
+    if (!window.confirm("Deseja realmente excluir este item do estoque?")) return;
+    iniciarAtualizacao();
+    try {
+      await axios.delete(`${API_URL}/api/estoque/${id_estoque}`);
+      carregarEstoque(true);
+    } catch (err) {
+      console.error(err);
+      alert('Erro ao excluir do estoque.');
+    } finally {
+      finalizarAtualizacao();
+    }
+  };
+
   const handleSalvarEstoqueManual = async () => {
     iniciarAtualizacao();
     try {
-      await axios.post(`${API_URL}/api/estoque`, ftForm);
+      if (ftForm.id_estoque) {
+        await axios.put(`${API_URL}/api/estoque/${ftForm.id_estoque}`, ftForm);
+      } else {
+        await axios.post(`${API_URL}/api/estoque`, ftForm);
+      }
       setModalEstoqueAberto(false);
-      setFtForm({ id_ft_principal: '', referencia: '', peso_conjunto: '', preco_conjunto: '', id_qualidfab: '', id_ondafab: '', nome_cliente: '', gramatura: '', quantidade: '' });
+      setFtForm({ id_estoque: '', id_ft_principal: '', referencia: '', peso_conjunto: '', preco_conjunto: '', id_qualidfab: '', id_ondafab: '', nome_cliente: '', gramatura: '', quantidade: '', acao: 'novo' });
       carregarEstoque(true);
     } catch (err) {
       console.error(err);
@@ -325,74 +377,102 @@ function App() {
     return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
   }
 
-  const calcularRotaOtimizada = useCallback(async (idsSelecionados, listaPedidos) => {
-    if (!idsSelecionados || idsSelecionados.length === 0) {
+  const calcularRotaOtimizada = async () => {
+    if (pedidosSelecionados.length === 0) {
       setRotaIdaGeometria([]);
       setRotaVoltaGeometria([]);
       setOrdemEntregas([]);
       return;
     }
 
-    const pedidosParaRota = (listaPedidos || pedidos).filter(p => p && idsSelecionados.includes(p.id) && p.latitude && p.longitude);
-    if (pedidosParaRota.length === 0) {
-      setRotaIdaGeometria([]);
-      setRotaVoltaGeometria([]);
-      setOrdemEntregas([]);
-      return;
-    }
+    let pedidosParaRota = pedidos.filter(p => p && pedidosSelecionados.includes(p.id));
+    if (pedidosParaRota.length === 0) return;
 
     if (abortControllerOSRM.current) abortControllerOSRM.current.abort();
     abortControllerOSRM.current = new AbortController();
+    const signal = abortControllerOSRM.current.signal;
 
+    iniciarAtualizacao();
     try {
-      let coordenadasString = `${COORDENADAS_EMPRESA[1]},${COORDENADAS_EMPRESA[0]}`;
-      pedidosParaRota.forEach(p => {
-        coordenadasString += `;${p.longitude},${p.latitude}`;
-      });
-
-      const url = `https://router.project-osrm.org/trip/v1/driving/${coordenadasString}?overview=full&geometries=geojson&source=first&destination=any`;
-      const res = await axios.get(url, { signal: abortControllerOSRM.current.signal });
-
-      if (res.data.trips && res.data.trips.length > 0) {
-        const coordenadasInvertidas = res.data.trips[0].geometry.coordinates.map(coord => [coord[1], coord[0]]);
-        const waypointsOrdenados = [...res.data.waypoints].sort((a, b) => a.waypoint_index - b.waypoint_index).filter(wp => wp.waypoint_index !== 0);
-
-        const ordemCalculada = waypointsOrdenados.map(wp => {
-          const idxOriginal = wp.trips_index !== undefined ? wp.trips_index : wp.waypoint_index;
-          return pedidosParaRota[idxOriginal - 1] ? pedidosParaRota[idxOriginal - 1].id : null;
-        }).filter(id => id !== null);
-
-        setOrdemEntregas(ordemCalculada);
-        const ultimoPedidoId = ordemCalculada[ordemCalculada.length - 1];
-        const ultimoPedido = pedidosParaRota.find(p => p.id === ultimoPedidoId);
-
-        if (ultimoPedido) {
-          const coordUltimoCliente = [ultimoPedido.latitude, ultimoPedido.longitude];
-          let indiceCorte = 0, menorDistancia = Infinity;
-
-          coordenadasInvertidas.forEach((coord, index) => {
-            const dist = calcularDistancia(coord, coordUltimoCliente);
-            if (dist < menorDistancia) {
-              menorDistancia = dist;
-              indiceCorte = index;
+      const pedidosComCoords = [];
+      for (const p of pedidosParaRota) {
+        if (!p.latitude || !p.longitude) {
+          try {
+            const res = await axios.get(`${API_URL}/api/geocode`, {
+              params: { id_cliente: p.id_cliente, endereco: p.endereco_completo },
+              signal
+            });
+            if (res.data.lat && res.data.lng) {
+              p.latitude = res.data.lat;
+              p.longitude = res.data.lng;
+              setPedidos(prev => prev.map(old => old.id === p.id ? { ...old, latitude: p.latitude, longitude: p.longitude } : old));
             }
-          });
-
-          setRotaIdaGeometria(coordenadasInvertidas.slice(0, indiceCorte + 1));
-          setRotaVoltaGeometria(coordenadasInvertidas.slice(indiceCorte));
-        } else {
-          setRotaIdaGeometria(coordenadasInvertidas);
-          setRotaVoltaGeometria([]);
+          } catch (err) {
+            console.error("Geocode falhou para pedido", p.id, err);
+          }
+        }
+        if (p.latitude && p.longitude) {
+          pedidosComCoords.push(p);
         }
       }
-    } catch (err) {
-      if (!axios.isCancel(err)) console.error("Erro OSRM:", err);
-    }
-  }, [pedidos]);
 
-  useEffect(() => {
-    calcularRotaOtimizada(pedidosSelecionados, pedidos);
-  }, [pedidosSelecionados, pedidos, calcularRotaOtimizada]);
+      if (pedidosComCoords.length === 0) {
+        finalizarAtualizacao();
+        alert("Nenhum pedido selecionado conseguiu ser geocodificado.");
+        return;
+      }
+
+      const payload = {
+        pedidos: pedidosComCoords.map(p => ({
+          id: p.id,
+          lat: p.latitude,
+          lng: p.longitude
+        }))
+      };
+
+      const novasCoords = {};
+      pedidosComCoords.forEach(p => {
+        novasCoords[p.id] = { lat: p.latitude, lng: p.longitude };
+      });
+      setCoordenadasPedidos(prev => ({ ...prev, ...novasCoords }));
+
+      const res = await axios.post(`${API_URL}/api/optimize_route`, payload, { signal });
+      if (res.data.coordenadas) {
+        setRotaIdaGeometria(res.data.coordenadas);
+        setRotaVoltaGeometria([]);
+        setOrdemEntregas(res.data.lifo_entregas || []);
+      }
+      finalizarAtualizacao();
+    } catch (err) {
+      finalizarAtualizacao();
+      if (!axios.isCancel(err)) console.error("Erro Roteamento:", err);
+    }
+  };
+
+  const [coordenadasPedidos, setCoordenadasPedidos] = useState({});
+
+  const gerarLinkGoogleMaps = () => {
+    if (ordemEntregas.length === 0) return;
+    const pedidosEntrega = [...ordemEntregas].reverse();
+    let url = `https://www.google.com/maps/dir/?api=1&origin=-23.70938551545255,-46.59345608749334&destination=-23.70938551545255,-46.59345608749334&waypoints=`;
+
+    const waypoints = [];
+    pedidosEntrega.forEach(id => {
+      const coords = coordenadasPedidos[id];
+      if (coords) {
+        waypoints.push(`${coords.lat},${coords.lng}`);
+      } else {
+        const p = pedidos.find(x => x.id === id);
+        if (p && p.latitude) waypoints.push(`${p.latitude},${p.longitude}`);
+      }
+    });
+
+    if (waypoints.length > 0) {
+      url += waypoints.join('|');
+      url += `&travelmode=driving`;
+      window.open(url, '_blank');
+    }
+  };
 
   const darBaixaCompra = (idCompra) => {
     iniciarAtualizacao();
@@ -416,6 +496,18 @@ function App() {
     setPedidosSelecionados(prev => prev.includes(pedido.id) ? prev.filter(id => id !== pedido.id) : [...prev, pedido.id]);
   }
 
+  useEffect(() => {
+    if (pedidosSelecionados.length === 0) {
+      setRotaIdaGeometria([]);
+      setRotaVoltaGeometria([]);
+      setOrdemEntregas([]);
+    } else if (ordemEntregas.length > 0) {
+      // Se ja havia uma rota sendo exibida e a selecao mudou (ex: desmarcou 1 pedido),
+      // recalcula a rota automaticamente.
+      calcularRotaOtimizada();
+    }
+  }, [pedidosSelecionados]);
+
   const toggleExpandirPedido = (idPedido) => {
     setPedidosExpandidos(prev => prev.includes(idPedido) ? prev.filter(id => id !== idPedido) : [...prev, idPedido])
   }
@@ -423,6 +515,11 @@ function App() {
   const toggleExpandirCompra = (idCompra) => {
     setComprasExpandidas(prev => prev.includes(idCompra) ? prev.filter(id => id !== idCompra) : [...prev, idCompra])
   }
+
+  const toggleExpandirItemCompra = (idItemStr) => {
+    setItensCompraExpandidos(prev => prev.includes(idItemStr) ? prev.filter(id => id !== idItemStr) : [...prev, idItemStr])
+  }
+
 
   const toggleExpandirOrcamento = (idOrcamento) => {
     setOrcamentosExpandidos(prev => prev.includes(idOrcamento) ? prev.filter(id => id !== idOrcamento) : [...prev, idOrcamento])
@@ -610,13 +707,18 @@ function App() {
   const orcamentosFiltrados = useMemo(() => {
     return orcamentos.filter(o => {
       if (!o) return false;
+      const statusOrc = o.status || 'Em Aberto';
+      if (statusOrc !== abaOrcamento) return false;
+
       const termo = termoPesquisaOrcamento.toLowerCase();
-      if (!termo) return true;
-      return String(o.id_orcamento || '').toLowerCase().includes(termo) ||
-        String(o.cliente || '').toLowerCase().includes(termo) ||
-        String(o.comprador || '').toLowerCase().includes(termo);
-    }).slice(0, limiteExibicao);
-  }, [orcamentos, termoPesquisaOrcamento, limiteExibicao]);
+      if (termo) {
+        return String(o.id_orcamento || '').toLowerCase().includes(termo) ||
+          String(o.cliente || '').toLowerCase().includes(termo) ||
+          String(o.comprador || '').toLowerCase().includes(termo);
+      }
+      return true;
+    });
+  }, [orcamentos, termoPesquisaOrcamento, abaOrcamento]);
 
   const estoqueFiltrado = useMemo(() => {
     return estoque.filter(e => {
@@ -651,7 +753,7 @@ function App() {
   const obterEstiloStatusCompleto = (status) => {
     const estilos = {
       'Pendente': isDarkMode ? 'bg-amber-500/10 text-amber-400 border-amber-500/20' : 'bg-amber-100 text-amber-700 border-amber-300',
-      'Compras': isDarkMode ? 'bg-sky-500/10 text-sky-400 border-sky-500/20' : 'bg-sky-100 text-sky-700 border-sky-300',
+      'Compras': isDarkMode ? 'bg-sky-500/10 text-sky-500 border-sky-500/20' : 'bg-sky-100 text-sky-700 border-sky-300',
       'Produção': isDarkMode ? 'bg-purple-500/10 text-purple-400 border-purple-500/20' : 'bg-purple-100 text-purple-700 border-purple-300',
       'Parcial': isDarkMode ? 'bg-teal-500/10 text-teal-400 border-teal-500/20' : 'bg-teal-100 text-teal-700 border-teal-300',
       'Pronto': isDarkMode ? 'bg-[#5DD62C]/10 text-[#5DD62C] border-[#5DD62C]/20' : 'bg-[#5DD62C]/20 text-[#337418] border-[#337418]/30',
@@ -742,36 +844,43 @@ function App() {
                   </thead>
                   <tbody className={`divide-y ${t.divider} ${t.textPrimary}`}>
                     {compra.itens.map((itemGroup, idxGroup) => {
-                      if (!itemGroup.ofs || itemGroup.ofs.length === 0) {
-                        return (
-                          <tr key={`item-${idxGroup}`} className={`${t.hoverCard}`}>
-                            <td className={`py-3 px-3 font-mono font-bold ${t.textSecondary}`}>-</td>
-                            <td className={`py-3 px-3 font-medium ${t.textSecondary}`}>-</td>
-                            <td className={`py-3 px-3 font-medium ${t.textSecondary}`}>Item sem OF: {itemGroup.item}</td>
-                            <td className="py-3 px-3 text-center font-mono">-</td>
-                            <td className="py-3 px-3 text-center font-mono">{itemGroup.quantidadeChapa}</td>
-                            <td className="py-3 px-3 text-right font-mono">R$ {itemGroup.vltot.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</td>
-                            <td className={`py-3 px-3 text-right font-mono ${t.textAccent}`}>{formatarKg(itemGroup.pesoChapa)} kg</td>
-                            <td className="py-3 px-3 text-center">-</td>
+                      const idItemUnico = `${compra.idCompra}-${itemGroup.item}-${idxGroup}`;
+                      const isItemExpanded = itensCompraExpandidos.includes(idItemUnico);
+
+                      return (
+                        <React.Fragment key={`group-${idItemUnico}`}>
+                          <tr className={`${t.hoverCard} cursor-pointer bg-black/10`} onClick={() => toggleExpandirItemCompra(idItemUnico)}>
+                            <td className={`py-3 px-3 font-mono font-bold ${t.textPrimary} flex items-center gap-2`}>
+                              <svg className={`w-4 h-4 transition-transform ${isItemExpanded ? 'rotate-90 text-[#5DD62C]' : t.textSecondary}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 5l7 7-7 7" /></svg>
+                              Medida: {itemGroup.medida || itemGroup.item}
+                            </td>
+                            <td colSpan="3" className={`py-3 px-3 font-medium ${t.textSecondary}`}>
+                              {itemGroup.ofs ? `${itemGroup.ofs.length} OF(s) vinculada(s)` : 'Sem OFs'}
+                            </td>
+                            <td className="py-3 px-3 text-center font-mono font-bold text-[#5DD62C]">{itemGroup.quantidadeChapa}</td>
+                            <td className="py-3 px-3 text-right font-mono font-bold">R$ {itemGroup.vltot.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</td>
+                            <td className={`py-3 px-3 text-right font-mono font-bold ${t.textAccent}`}>{formatarKg(itemGroup.pesoChapa)} kg</td>
+                            <td className="py-3 px-3 text-center"></td>
                           </tr>
-                        )
-                      }
-                      return itemGroup.ofs.map((of, idxOf) => (
-                        <tr key={`of-${idxGroup}-${idxOf}`} className={`${t.hoverCard}`}>
-                          <td className={`py-3 px-3 font-mono font-bold ${t.textAccent}`}>OF {of.idOF}</td>
-                          <td className="py-3 px-3 font-medium">{of.cliente || '-'}</td>
-                          <td className="py-3 px-3 font-medium">{of.referencia || itemGroup.item}</td>
-                          <td className="py-3 px-3 text-center font-mono">{of.quantOF}</td>
-                          <td className={`py-3 px-3 text-center font-mono ${t.textSecondary}`}>{idxOf === 0 ? itemGroup.quantidadeChapa : '—'}</td>
-                          <td className="py-3 px-3 text-right font-mono">{idxOf === 0 ? `R$ ${itemGroup.vltot.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}` : '—'}</td>
-                          <td className={`py-3 px-3 text-right font-mono ${t.textAccent}`}>{idxOf === 0 ? `${formatarKg(itemGroup.pesoChapa)} kg` : '—'}</td>
-                          <td className="py-3 px-3 text-center">
-                            <span className={`px-2.5 py-1 rounded-full text-[11px] font-semibold border whitespace-nowrap ${obterEstiloStatusCompleto(of.statusOF).replace('hover:', '')}`}>
-                              {of.statusOF}
-                            </span>
-                          </td>
-                        </tr>
-                      ))
+
+                          {isItemExpanded && itemGroup.ofs && itemGroup.ofs.map((of, idxOf) => (
+                            <tr key={`of-${idItemUnico}-${idxOf}`} className={`${t.hoverCard} bg-black/20 border-l-2 border-l-[#5DD62C]`}>
+                              <td className={`py-3 px-3 pl-8 font-mono font-bold ${t.textAccent}`}>OF {of.idOF}</td>
+                              <td className="py-3 px-3 font-medium">{of.cliente || '-'}</td>
+                              <td className="py-3 px-3 font-medium text-gray-400">{of.referencia || itemGroup.item}</td>
+                              <td className="py-3 px-3 text-center font-mono">{of.quantOF}</td>
+                              <td className="py-3 px-3 text-center font-mono text-gray-500">-</td>
+                              <td className="py-3 px-3 text-right font-mono text-gray-500">-</td>
+                              <td className="py-3 px-3 text-right font-mono text-gray-500">-</td>
+                              <td className="py-3 px-3 text-center">
+                                <span className={`px-2.5 py-1 rounded-full text-[11px] font-semibold border whitespace-nowrap ${obterEstiloStatusCompleto(of.statusOF).replace('hover:', '')}`}>
+                                  {of.statusOF}
+                                </span>
+                              </td>
+                            </tr>
+                          ))}
+                        </React.Fragment>
+                      )
                     })}
                   </tbody>
                 </table>
@@ -902,48 +1011,64 @@ function App() {
               <div className="col-span-full">
                 <label className={`block text-[11px] font-bold ${t.textSecondary} uppercase tracking-wider mb-1`}>ID FT Principal (Bipe/Digite e saia do campo para buscar)</label>
                 <div className="flex gap-2">
-                  <input type="text" value={ftForm.id_ft_principal} onChange={e => setFtForm(prev => ({ ...prev, id_ft_principal: e.target.value }))} onBlur={handleIdFtBlur} className={`w-full ${t.inner} ${t.textPrimary} border ${t.border} rounded-lg px-3 py-2 text-sm focus:border-sky-500 focus:outline-none`} placeholder="Bipe ou Digite o ID" />
-                  {buscandoFt && <span className="text-sky-500 text-xs self-center animate-pulse">Buscando...</span>}
+                  <input type="text" value={ftForm.id_ft_principal} onChange={e => setFtForm(prev => ({ ...prev, id_ft_principal: e.target.value }))} onBlur={handleIdFtBlur} className={`w-full ${t.inner} ${t.textPrimary} border ${t.border} rounded-lg px-3 py-2 text-sm focus:border-[#5DD62C] focus:outline-none`} placeholder="Bipe ou Digite o ID" />
+                  {buscandoFt && <span className="text-[#5DD62C] text-xs self-center animate-pulse">Buscando...</span>}
                 </div>
               </div>
 
               <div>
                 <label className={`block text-[11px] font-bold ${t.textSecondary} uppercase tracking-wider mb-1`}>Referência</label>
-                <input type="text" value={ftForm.referencia} onChange={e => setFtForm(prev => ({ ...prev, referencia: e.target.value }))} className={`w-full ${t.inner} ${t.textPrimary} border ${t.border} rounded-lg px-3 py-2 text-sm focus:border-sky-500 focus:outline-none`} disabled />
+                <input type="text" value={ftForm.referencia} onChange={e => setFtForm(prev => ({ ...prev, referencia: e.target.value }))} className={`w-full ${t.inner} ${t.textPrimary} border ${t.border} rounded-lg px-3 py-2 text-sm focus:border-[#5DD62C] focus:outline-none`} disabled />
               </div>
 
               <div>
                 <label className={`block text-[11px] font-bold ${t.textSecondary} uppercase tracking-wider mb-1`}>Cliente</label>
-                <input type="text" value={ftForm.nome_cliente} onChange={e => setFtForm(prev => ({ ...prev, nome_cliente: e.target.value }))} className={`w-full ${t.inner} ${t.textPrimary} border ${t.border} rounded-lg px-3 py-2 text-sm focus:border-sky-500 focus:outline-none`} disabled />
+                <input type="text" value={ftForm.nome_cliente} onChange={e => setFtForm(prev => ({ ...prev, nome_cliente: e.target.value }))} className={`w-full ${t.inner} ${t.textPrimary} border ${t.border} rounded-lg px-3 py-2 text-sm focus:border-[#5DD62C] focus:outline-none`} disabled />
               </div>
 
               <div>
-                <label className={`block text-[11px] font-bold ${t.textSecondary} uppercase tracking-wider mb-1 text-sky-400`}>Peso do Conjunto (kg)</label>
-                <input type="number" step="0.01" value={ftForm.peso_conjunto} onChange={e => setFtForm(prev => ({ ...prev, peso_conjunto: e.target.value }))} className={`w-full bg-sky-500/10 ${t.textPrimary} border border-sky-500/50 rounded-lg px-3 py-2 text-sm focus:border-sky-500 focus:outline-none`} disabled />
+                <label className={`block text-[11px] font-bold ${t.textSecondary} uppercase tracking-wider mb-1 text-[#5DD62C]`}>Peso do Conjunto (kg)</label>
+                <input type="number" step="0.01" value={ftForm.peso_conjunto} onChange={e => setFtForm(prev => ({ ...prev, peso_conjunto: e.target.value }))} className={`w-full bg-[#5DD62C]/10 ${t.textPrimary} border border-[#5DD62C]/50 rounded-lg px-3 py-2 text-sm focus:border-[#5DD62C] focus:outline-none`} disabled />
               </div>
 
               <div>
-                <label className={`block text-[11px] font-bold ${t.textSecondary} uppercase tracking-wider mb-1 text-sky-400`}>Preço do Conjunto (R$)</label>
-                <input type="number" step="0.01" value={ftForm.preco_conjunto} onChange={e => setFtForm(prev => ({ ...prev, preco_conjunto: e.target.value }))} className={`w-full bg-sky-500/10 ${t.textPrimary} border border-sky-500/50 rounded-lg px-3 py-2 text-sm focus:border-sky-500 focus:outline-none`} disabled />
+                <label className={`block text-[11px] font-bold ${t.textSecondary} uppercase tracking-wider mb-1 text-[#5DD62C]`}>Preço do Conjunto (R$)</label>
+                <input type="number" step="0.01" value={ftForm.preco_conjunto} onChange={e => setFtForm(prev => ({ ...prev, preco_conjunto: e.target.value }))} className={`w-full bg-[#5DD62C]/10 ${t.textPrimary} border border-[#5DD62C]/50 rounded-lg px-3 py-2 text-sm focus:border-[#5DD62C] focus:outline-none`} disabled />
               </div>
 
               <div>
                 <label className={`block text-[11px] font-bold ${t.textSecondary} uppercase tracking-wider mb-1`}>Onda</label>
-                <input type="text" value={ftForm.id_ondafab} onChange={e => setFtForm(prev => ({ ...prev, id_ondafab: e.target.value }))} className={`w-full ${t.inner} ${t.textPrimary} border ${t.border} rounded-lg px-3 py-2 text-sm focus:border-sky-500 focus:outline-none`} disabled />
+                <input type="text" value={ftForm.id_ondafab} onChange={e => setFtForm(prev => ({ ...prev, id_ondafab: e.target.value }))} className={`w-full ${t.inner} ${t.textPrimary} border ${t.border} rounded-lg px-3 py-2 text-sm focus:border-[#5DD62C] focus:outline-none`} disabled />
               </div>
 
               <div>
                 <label className={`block text-[11px] font-bold ${t.textSecondary} uppercase tracking-wider mb-1`}>Qualidade</label>
-                <input type="text" value={ftForm.id_qualidfab} onChange={e => setFtForm(prev => ({ ...prev, id_qualidfab: e.target.value }))} className={`w-full ${t.inner} ${t.textPrimary} border ${t.border} rounded-lg px-3 py-2 text-sm focus:border-sky-500 focus:outline-none`} disabled />
+                <input type="text" value={ftForm.id_qualidfab} onChange={e => setFtForm(prev => ({ ...prev, id_qualidfab: e.target.value }))} className={`w-full ${t.inner} ${t.textPrimary} border ${t.border} rounded-lg px-3 py-2 text-sm focus:border-[#5DD62C] focus:outline-none`} disabled />
               </div>
 
               <div>
                 <label className={`block text-[11px] font-bold ${t.textSecondary} uppercase tracking-wider mb-1`}>Gramatura</label>
-                <input type="text" value={ftForm.gramatura} onChange={e => setFtForm(prev => ({ ...prev, gramatura: e.target.value }))} className={`w-full ${t.inner} ${t.textPrimary} border ${t.border} rounded-lg px-3 py-2 text-sm focus:border-sky-500 focus:outline-none`} disabled />
+                <input type="text" value={ftForm.gramatura} onChange={e => setFtForm(prev => ({ ...prev, gramatura: e.target.value }))} className={`w-full ${t.inner} ${t.textPrimary} border ${t.border} rounded-lg px-3 py-2 text-sm focus:border-[#5DD62C] focus:outline-none`} disabled />
               </div>
 
-              <div>
-                <label className={`block text-[11px] font-bold text-[#5DD62C] uppercase tracking-wider mb-1`}>Quantidade a Inserir</label>
+              <div className="col-span-full border-t border-gray-700/50 pt-4 mt-2">
+                <label className={`block text-[11px] font-bold text-[#5DD62C] uppercase tracking-wider mb-3`}>Quantidade a Inserir</label>
+
+                <div className="flex flex-wrap gap-4 mb-4">
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input type="radio" name="acao" value="novo" checked={ftForm.acao === 'novo'} onChange={e => setFtForm(prev => ({ ...prev, acao: e.target.value }))} className="accent-[#5DD62C]" />
+                    <span className={`text-sm ${t.textPrimary}`}>Lançamento Novo</span>
+                  </label>
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input type="radio" name="acao" value="somar" checked={ftForm.acao === 'somar'} onChange={e => setFtForm(prev => ({ ...prev, acao: e.target.value }))} className="accent-[#5DD62C]" />
+                    <span className={`text-sm ${t.textPrimary}`}>Somar ao Estoque</span>
+                  </label>
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input type="radio" name="acao" value="substituir" checked={ftForm.acao === 'substituir'} onChange={e => setFtForm(prev => ({ ...prev, acao: e.target.value }))} className="accent-[#5DD62C]" />
+                    <span className={`text-sm ${t.textPrimary}`}>Substituir Estoque</span>
+                  </label>
+                </div>
+
                 <input type="number" autoFocus={!!ftForm.referencia} value={ftForm.quantidade} onChange={e => setFtForm(prev => ({ ...prev, quantidade: e.target.value }))} className={`w-full ${t.inner} ${t.textPrimary} border border-[#5DD62C] rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-[#5DD62C] transition-all`} placeholder="Ex: 500" />
               </div>
             </div>
@@ -1008,6 +1133,23 @@ function App() {
                     >
                       <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7" /></svg>
                       Forçar Baixa ({pedidosSelecionados.length})
+                    </button>
+                  )}
+                  {pedidosSelecionados.length > 0 && (
+                    <button
+                      onClick={calcularRotaOtimizada}
+                      className="bg-[#2C85D6] hover:bg-[#1A5285] text-white text-[11px] px-3 py-1.5 rounded font-bold shadow transition-all flex items-center gap-1"
+                    >
+                      <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7" /></svg>
+                      Calcular Rota ({pedidosSelecionados.length})
+                    </button>
+                  )}
+                  {ordemEntregas.length > 0 && (
+                    <button
+                      onClick={gerarLinkGoogleMaps}
+                      className="bg-amber-500 hover:bg-amber-600 text-white text-[11px] px-3 py-1.5 rounded font-bold shadow transition-all flex items-center gap-1"
+                    >
+                      Exportar Rota
                     </button>
                   )}
                 </div>
@@ -1154,7 +1296,7 @@ function App() {
                   const { texto: textoDias, dias } = calcularTempoProducao(of.data_producao);
                   const corTag = dias >= 5 ? 'text-red-400 bg-red-500/10 border-red-500/20' :
                     dias >= 3 ? 'text-amber-400 bg-amber-500/10 border-amber-500/20' :
-                      'text-sky-400 bg-sky-500/10 border-sky-500/20';
+                      'text-[#5DD62C] bg-[#5DD62C]/10 border-[#5DD62C]/20';
 
                   return (
                     <div key={`${of.id_numof}-${idx}`} className={`${t.card} rounded-2xl border ${t.border} p-5 flex flex-col justify-between shadow-lg transition-all hover:border-purple-500/40 hover:shadow-purple-500/5`}>
@@ -1244,14 +1386,25 @@ function App() {
             <div className={`flex flex-col md:flex-row justify-between items-start md:items-center mb-6 gap-4 border-b ${t.border} pb-5`}>
               <div>
                 <h2 className={`text-xl font-bold ${t.textPrimary}`}>Gestão de Orçamentos</h2>
+                <div className={`flex mt-3 bg-[#151515] rounded-lg border ${t.border} p-1 overflow-x-auto`}>
+                  {['Em Aberto', 'Aprovado', 'Reprovado'].map(status => (
+                    <button
+                      key={status}
+                      onClick={() => setAbaOrcamento(status)}
+                      className={`px-4 py-1.5 text-xs font-bold rounded-md transition-all whitespace-nowrap ${abaOrcamento === status ? 'bg-[#337418] text-white shadow-sm' : `text-gray-500 hover:${t.textPrimary}`}`}
+                    >
+                      {status}
+                    </button>
+                  ))}
+                </div>
               </div>
 
-              <div className={`flex flex-col xl:flex-row items-center gap-3 w-full xl:w-auto`}>
+              <div className={`flex flex-col xl:flex-row items-center gap-3 w-full xl:w-auto mt-4 md:mt-0`}>
                 <div className="relative w-full xl:w-64 flex-shrink-0">
                   <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none"><svg className={`w-4 h-4 ${t.textSecondary}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" /></svg></div>
-                  <input type="text" value={termoPesquisaOrcamento} onChange={(e) => setTermoPesquisaOrcamento(e.target.value)} placeholder="Buscar Nº, cliente ou contato..." className={`w-full pl-9 pr-3 py-3 md:py-2 bg-transparent border ${t.border} rounded-lg text-xs md:text-sm ${t.textPrimary} focus:outline-none focus:border-sky-500`} />
+                  <input type="text" value={termoPesquisaOrcamento} onChange={(e) => setTermoPesquisaOrcamento(e.target.value)} placeholder="Buscar Nº, cliente ou contato..." className={`w-full pl-9 pr-3 py-3 md:py-2 bg-transparent border ${t.border} rounded-lg text-xs md:text-sm ${t.textPrimary} focus:outline-none focus:border-[#5DD62C]`} />
                 </div>
-                <button onClick={() => carregarOrcamentos(false)} className={`w-full xl:w-auto ${t.card} border ${t.border} ${t.textPrimary} hover:border-sky-500 hover:text-sky-500 px-4 py-3 md:py-2 rounded-lg text-xs font-semibold shadow-sm transition-all`}>
+                <button onClick={() => carregarOrcamentos(false)} className={`w-full xl:w-auto ${t.card} border ${t.border} ${t.textPrimary} hover:border-[#5DD62C] hover:text-[#5DD62C] px-4 py-3 md:py-2 rounded-lg text-xs font-semibold shadow-sm transition-all`}>
                   Atualizar Tabela
                 </button>
               </div>
@@ -1268,13 +1421,22 @@ function App() {
                     'text-[#5DD62C] bg-[#5DD62C]/10 border-[#5DD62C]/20';
 
                 return (
-                  <div key={orc.id_orcamento} className={`${t.inner} rounded-2xl border ${t.border} overflow-hidden shadow-sm hover:border-sky-500/50 transition-all flex flex-col`}>
+                  <div key={orc.id_orcamento} className={`${t.inner} rounded-2xl border ${t.border} overflow-hidden shadow-sm hover:border-[#5DD62C]/50 transition-all flex flex-col`}>
                     <div className={`p-4 md:p-5 flex flex-col gap-4 border-b ${t.border}`}>
                       <div className="flex justify-between items-start gap-2">
                         <div>
                           <div className="flex items-center gap-2 mb-1.5 flex-wrap">
-                            <span className={`text-xs font-mono font-bold bg-sky-500/10 text-sky-500 px-2 py-0.5 rounded border border-sky-500/20`}>ORC: {orc.id_orcamento}</span>
+                            <span className={`text-xs font-mono font-bold bg-[#5DD62C]/10 text-[#5DD62C] px-2 py-0.5 rounded border border-[#5DD62C]/20`}>ORC: {orc.id_orcamento}</span>
                             <span className={`text-[10px] font-mono font-bold ${corDias} px-2 py-0.5 rounded border`}>{textoDias}</span>
+                            <select
+                              value={orc.status || 'Em Aberto'}
+                              onChange={(e) => atualizarStatusOrcamento(orc.id_orcamento, e.target.value)}
+                              className={`text-[10px] ml-1 font-bold rounded-full px-2 py-0.5 border cursor-pointer focus:outline-none bg-transparent ${orc.status === 'Aprovado' ? 'text-[#5DD62C] border-[#5DD62C]/30' : orc.status === 'Reprovado' ? 'text-red-400 border-red-400/30' : 'text-amber-400 border-amber-400/30'}`}
+                            >
+                              <option className="bg-[#1a1a1a] text-amber-400" value="Em Aberto">Em Aberto</option>
+                              <option className="bg-[#1a1a1a] text-[#5DD62C]" value="Aprovado">Aprovado</option>
+                              <option className="bg-[#1a1a1a] text-red-400" value="Reprovado">Reprovado</option>
+                            </select>
                           </div>
                           <h3 className={`font-bold ${t.textPrimary} text-base leading-tight mt-1 line-clamp-1`} title={orc.cliente}>{orc.cliente}</h3>
                         </div>
@@ -1317,17 +1479,17 @@ function App() {
                             value={textoNotaTemp}
                             onChange={(e) => setTextoNotaTemp(e.target.value)}
                             placeholder="Digite as anotações da negociação aqui..."
-                            className={`w-full ${t.inner} ${t.textPrimary} border ${t.border} rounded-lg px-3 py-2 text-xs focus:outline-none focus:border-sky-500 resize-none h-20 transition-all`}
+                            className={`w-full ${t.inner} ${t.textPrimary} border ${t.border} rounded-lg px-3 py-2 text-xs focus:outline-none focus:border-[#5DD62C] resize-none h-20 transition-all`}
                           />
                           <div className="flex gap-2 justify-end">
                             <button onClick={() => setEditandoNotaOrcamento(null)} className={`px-3 py-1.5 rounded-md text-[10px] font-bold ${t.textSecondary} hover:${t.textPrimary} border ${t.border} transition-colors`}>Cancelar</button>
-                            <button onClick={() => salvarNotaOrcamento(orc.id_orcamento)} className="px-4 py-1.5 rounded-md text-[10px] font-bold bg-sky-500 hover:bg-sky-600 text-white shadow-sm transition-colors">Salvar Nota</button>
+                            <button onClick={() => salvarNotaOrcamento(orc.id_orcamento)} className="px-4 py-1.5 rounded-md text-[10px] font-bold bg-[#5DD62C] hover:bg-[#337418] text-[#0F0F0F] hover:text-[#F8F8F8] shadow-sm transition-colors">Salvar Nota</button>
                           </div>
                         </div>
                       ) : (
                         <div
                           onClick={() => { setTextoNotaTemp(orc.anotacao || ""); setEditandoNotaOrcamento(orc.id_orcamento); }}
-                          className={`w-full ${t.inner} border ${t.border} border-dashed rounded-lg p-3 text-xs ${orc.anotacao ? t.textPrimary : `${t.textSecondary} italic`} cursor-pointer hover:border-sky-500/50 transition-colors min-h-[60px] whitespace-pre-wrap`}
+                          className={`w-full ${t.inner} border ${t.border} border-dashed rounded-lg p-3 text-xs ${orc.anotacao ? t.textPrimary : `${t.textSecondary} italic`} cursor-pointer hover:border-[#5DD62C]/50 transition-colors min-h-[60px] whitespace-pre-wrap`}
                         >
                           {orc.anotacao || "Clique para adicionar uma anotação sobre esta negociação..."}
                         </div>
@@ -1374,7 +1536,7 @@ function App() {
 
             {orcamentos.length > limiteExibicao && (
               <div className="flex justify-center mt-6">
-                <button onClick={() => setLimiteExibicao(prev => prev + 20)} className={`px-6 py-3 rounded-xl text-sm font-bold shadow-md transition-all bg-sky-500 hover:bg-sky-600 text-white w-full md:w-auto hover:scale-105`}>
+                <button onClick={() => setLimiteExibicao(prev => prev + 20)} className={`px-6 py-3 rounded-xl text-sm font-bold shadow-md transition-all bg-[#5DD62C] hover:bg-[#337418] text-[#0F0F0F] hover:text-[#F8F8F8] w-full md:w-auto hover:scale-105`}>
                   Carregar Mais Orçamentos
                 </button>
               </div>
@@ -1390,6 +1552,13 @@ function App() {
 
           return (
             <div className="space-y-6 sm:space-y-8 w-full relative z-0">
+
+              <div className="flex justify-end mb-4">
+                <button onClick={() => alterarAba('calendario')} className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-bold shadow-md transition-all ${t.bgAccentSoft} ${t.textAccent} hover:scale-105 border ${t.borderAccentSoft}`}>
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"></path></svg>
+                  Visualização Mensal de Pesos
+                </button>
+              </div>
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 md:gap-5">
                 <div className={`${t.card} p-5 md:p-6 rounded-2xl shadow-md flex flex-col justify-center transition-all duration-300`}>
                   <p className={`text-[12px] sm:text-[13px] font-medium ${t.textSecondary} mb-1.5`}>Faturamento em Aberto</p>
@@ -1565,7 +1734,7 @@ function App() {
                                               <td className="py-3 px-3 text-center">
                                                 <select value={item.statusOF || 'Pendente'} onChange={(e) => alternarStatusOf(pedido.id, item.id_numof, e.target.value)} className={`text-[10px] font-bold rounded-full px-2.5 py-1.5 border cursor-pointer focus:outline-none ${obterEstiloStatusCompleto(item.statusOF)}`}>
                                                   <option value="Pendente" className={`${t.card} text-amber-500`}>O Pendente</option>
-                                                  <option value="Compras" className={`${t.card} text-sky-500`}>Compras</option>
+                                                  <option value="Compras" className={`${t.card} text-sky-500`}>{item.id_compra && item.statusOF === 'Compras' ? `Compras (OC: ${item.id_compra})` : 'Compras'}</option>
                                                   <option value="Produção" className={`${t.card} text-purple-500`}>Produção</option>
                                                   <option value="Parcial" className={`${t.card} text-teal-500`}>Parcial</option>
                                                   <option value="Pronto" className={`${t.card} ${t.textAccent}`}>✓ Concluído</option>
@@ -1645,7 +1814,7 @@ function App() {
                                           </div>
                                           <select value={item.statusOF || 'Pendente'} onChange={(e) => alternarStatusOf(pedido.id, item.id_numof, e.target.value)} className={`w-full py-2 md:py-1.5 mt-1 rounded-md text-[11px] md:text-[10px] font-bold border transition-all cursor-pointer focus:outline-none ${obterEstiloStatusCompleto(item.statusOF)}`}>
                                             <option value="Pendente" className={`${t.card} text-amber-500`}>Pendente</option>
-                                            <option value="Compras" className={`${t.card} text-sky-500`}>Compras</option>
+                                            <option value="Compras" className={`${t.card} text-sky-500`}>{item.id_compra && item.statusOF === 'Compras' ? `Compras (OC: ${item.id_compra})` : 'Compras'}</option>
                                             <option value="Produção" className={`${t.card} text-purple-500`}>Produção</option>
                                             <option value="Parcial" className={`${t.card} text-teal-500`}>Parcial</option>
                                             <option value="Pronto" className={`${t.card} ${t.textAccent}`}>Concluído</option>
@@ -1779,7 +1948,7 @@ function App() {
               </div>
 
               <div className={`${t.card} p-5 md:p-6 rounded-2xl shadow-md flex flex-col justify-center relative overflow-hidden`}>
-                <div className={`absolute top-0 right-0 w-2 h-full bg-sky-500`}></div>
+                <div className={`absolute top-0 right-0 w-2 h-full bg-[#5DD62C]`}></div>
                 <p className={`text-[13px] font-medium ${t.textSecondary} mb-1.5`}>Peso Expedido ({empresaFiltro === 'ruycepel' ? 'Ruycepel' : empresaFiltro === 'elly' ? 'Elly' : 'Total'})</p>
                 <p className={`text-2xl md:text-3xl font-bold ${t.textPrimary}`}>{formatarKg(dadosDashboardAtivo.peso_mes_kg)} <span className={`text-sm md:text-base font-medium ${t.textAccent} ml-1`}>kg</span></p>
               </div>
@@ -1837,6 +2006,128 @@ function App() {
           </div>
         )}
 
+
+        {/* ABA CALENDARIO */}
+        {abaAtiva === 'calendario' && (() => {
+          const dados = calendarioPesosData.dados;
+          const carregando = calendarioPesosData.carregando;
+
+          const mesesNomes = ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"];
+
+          const getDiasNoMes = (mes, ano) => new Date(ano, mes, 0).getDate();
+          const getDiaSemanaInicio = (mes, ano) => new Date(ano, mes - 1, 1).getDay();
+
+          const diasNoMes = getDiasNoMes(calendarioPesosData.mes, calendarioPesosData.ano);
+          const diaInicio = getDiaSemanaInicio(calendarioPesosData.mes, calendarioPesosData.ano);
+
+          const diasArray = Array.from({ length: diasNoMes }, (_, i) => i + 1);
+          const diasVazios = Array.from({ length: diaInicio }, (_, i) => i);
+
+          const totalSaida = dados ? dados.saida_mes_anterior_kg : 0;
+          const totalEntradaMes = dados ? dados.entrada_mes_kg : 0;
+          const totalBacklog = dados ? dados.backlog_anterior_kg : 0;
+          const totalExibido = modoPesoCalendario === 'total' ? (totalEntradaMes + totalBacklog) : totalEntradaMes;
+
+          const mudarMes = (delta) => {
+            setCalendarioPesosData(prev => {
+              let novoMes = prev.mes + delta;
+              let novoAno = prev.ano;
+              if (novoMes > 12) { novoMes = 1; novoAno++; }
+              else if (novoMes < 1) { novoMes = 12; novoAno--; }
+              return { ...prev, mes: novoMes, ano: novoAno };
+            });
+          };
+
+          return (
+            <div className="space-y-6 sm:space-y-8 w-full relative z-0">
+              <div className="flex flex-col sm:flex-row justify-between items-center gap-4 mb-2">
+                <div className="flex items-center gap-4">
+                  <button onClick={() => mudarMes(-1)} className={`p-2 rounded-lg border ${t.border} ${t.hoverCard} ${t.textSecondary} hover:${t.textPrimary}`}><svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 19l-7-7 7-7" /></svg></button>
+                  <h2 className={`text-xl font-bold ${t.textPrimary} min-w-[150px] text-center`}>{mesesNomes[calendarioPesosData.mes - 1]} {calendarioPesosData.ano}</h2>
+                  <button onClick={() => mudarMes(1)} className={`p-2 rounded-lg border ${t.border} ${t.hoverCard} ${t.textSecondary} hover:${t.textPrimary}`}><svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 5l7 7-7 7" /></svg></button>
+                </div>
+                <button onClick={() => alterarAba('prazos')} className={`text-sm ${t.textSecondary} hover:${t.textPrimary} underline flex items-center gap-1`}>Voltar aos Pedidos</button>
+              </div>
+
+              <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
+                {/* Grade do Calendário */}
+                <div className={`lg:col-span-3 ${t.card} rounded-2xl border ${t.border} overflow-hidden shadow-md`}>
+                  {carregando && !dados ? (
+                    <div className={`p-12 text-center ${t.textSecondary}`}>Carregando pesos...</div>
+                  ) : (
+                    <div className="w-full">
+                      <div className={`grid grid-cols-7 border-b ${t.border} ${t.innerAlt}`}>
+                        {['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'].map(dia => (
+                          <div key={dia} className={`py-3 text-center text-xs font-bold uppercase tracking-wider ${t.textSecondary}`}>{dia}</div>
+                        ))}
+                      </div>
+                      <div className={`grid grid-cols-7 bg-transparent`}>
+                        {diasVazios.map(i => (
+                          <div key={`vazio-${i}`} className={`aspect-square border-b border-r ${t.border} opacity-20`}></div>
+                        ))}
+                        {diasArray.map(dia => {
+                          const pesoDia = dados ? (dados.dias_calendario[String(dia)] || 0) : 0;
+                          const temPeso = pesoDia > 0;
+                          return (
+                            <div key={dia} className={`aspect-square border-b border-r ${t.border} p-1 sm:p-2 flex flex-col relative transition-colors ${temPeso ? `${t.bgAccentSoft}` : ''}`}>
+                              <span className={`text-xs font-bold absolute top-1 right-2 sm:top-2 sm:right-3 ${temPeso ? t.textAccent : t.textSecondary}`}>{dia}</span>
+                              {temPeso && (
+                                <div className="mt-auto mb-auto flex flex-col items-center justify-center">
+                                  <span className={`text-xs sm:text-sm md:text-base font-bold ${t.textPrimary} text-center leading-tight`}>{formatarKg(pesoDia)}</span>
+                                  <span className={`text-[9px] sm:text-[10px] ${t.textSecondary} uppercase tracking-wider`}>kg</span>
+                                </div>
+                              )}
+                            </div>
+                          )
+                        })}
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* Blocos Laterais */}
+                <div className="flex flex-col gap-6">
+                  <div className={`${t.card} p-5 md:p-6 rounded-2xl shadow-md flex flex-col justify-center border ${t.border}`}>
+                    <div className="flex items-center gap-2 mb-2">
+                      <svg className={`w-5 h-5 ${t.textSecondary}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 11l3-3m0 0l3 3m-3-3v8m0-13a9 9 0 110 18 9 9 0 010-18z" /></svg>
+                      <p className={`text-[12px] sm:text-[13px] font-medium ${t.textSecondary} uppercase tracking-wider`}>Saída ({mesesNomes[calendarioPesosData.mes === 1 ? 11 : calendarioPesosData.mes - 2]})</p>
+                    </div>
+                    <p className={`text-2xl md:text-3xl font-bold ${t.textPrimary}`}>{formatarKg(totalSaida)} <span className="text-sm font-normal text-gray-500">kg</span></p>
+                    <p className={`text-[10px] mt-2 ${t.textSecondary}`}>Total de NFs + Recibos do mês anterior</p>
+                  </div>
+
+                  <div className={`${t.card} p-5 md:p-6 rounded-2xl shadow-md flex flex-col justify-center border ${t.borderAccentSoft} relative overflow-hidden`}>
+                    <div className={`absolute top-0 right-0 w-16 h-16 ${t.bgAccentSoft} rounded-bl-full -z-10 opacity-50`}></div>
+
+                    <div className="flex justify-between items-start mb-4">
+                      <div className="flex items-center gap-2">
+                        <svg className={`w-5 h-5 ${t.textAccent}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 14l-7 7m0 0l-7-7m7 7V3" /></svg>
+                        <p className={`text-[12px] sm:text-[13px] font-medium ${t.textAccent} uppercase tracking-wider`}>Peso em Aberto</p>
+                      </div>
+                    </div>
+
+                    <p className={`text-3xl md:text-4xl font-bold ${t.textPrimary} mb-4`}>{formatarKg(totalExibido)} <span className="text-sm font-normal text-gray-500">kg</span></p>
+
+                    <div className={`flex bg-[#151515] rounded-lg border ${t.border} p-1 w-full mt-auto`}>
+                      <button
+                        onClick={() => setModoPesoCalendario('mes')}
+                        className={`flex-1 py-1.5 text-[11px] font-bold rounded-md transition-all ${modoPesoCalendario === 'mes' ? 'bg-[#337418] text-white shadow-sm' : 'text-gray-500 hover:text-gray-300'}`}
+                      >Apenas Mês</button>
+                      <button
+                        onClick={() => setModoPesoCalendario('total')}
+                        className={`flex-1 py-1.5 text-[11px] font-bold rounded-md transition-all ${modoPesoCalendario === 'total' ? 'bg-[#337418] text-white shadow-sm' : 'text-gray-500 hover:text-gray-300'}`}
+                      >Mês + Backlog</button>
+                    </div>
+                    <p className={`text-[10px] mt-3 ${t.textSecondary} text-center`}>
+                      {modoPesoCalendario === 'mes' ? 'Peso apenas de pedidos emitidos no mês.' : 'Passivo real total da fábrica.'}
+                    </p>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )
+        })()}
+
         {/* ABA ESTOQUE DE CAIXAS */}
         {abaAtiva === 'estoque' && (
           <div className="space-y-6">
@@ -1846,7 +2137,7 @@ function App() {
                 <p className={`text-sm ${t.textSecondary}`}>Estoque gerado a partir da diferença entre quantidade produzida e faturada.</p>
               </div>
               <div className="flex gap-4">
-                <button onClick={() => setModalEstoqueAberto(true)} className="bg-[#5DD62C] hover:bg-[#337418] text-[#0F0F0F] hover:text-[#F8F8F8] px-4 py-2 rounded-xl text-xs font-bold transition-all shadow-md">
+                <button onClick={() => setModalEstoqueAberto(true)} className={`px-4 py-2 rounded-xl text-xs font-bold transition-all shadow-md border ${t.borderAccentSoft} ${t.bgAccentSoft} ${t.textAccent} hover:scale-105`}>
                   + Adicionar Manualmente
                 </button>
                 <div className="text-right">
@@ -1876,7 +2167,7 @@ function App() {
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
               {estoqueFiltrado.map((item, idx) => (
                 <div key={`${item.id_produto}_${idx}`} className={`${t.card} rounded-xl overflow-hidden shadow-lg border ${t.border} hover:border-[#5DD62C]/50 transition-all`}>
-                  <div className={`p-4 border-b ${t.border} bg-black/5 flex justify-between items-start`}>
+                  <div className={`p-4 border-b ${t.border} ${t.innerAlt} flex justify-between items-start`}>
                     <div>
                       <span className={`inline-block px-2 py-0.5 rounded text-[10px] font-bold font-mono ${t.bgAccentSoft} ${t.textAccent} border ${t.borderAccentSoft} mb-2`}>REF: {item.referencia}</span>
                       <h3 className={`font-bold ${t.textPrimary} text-base leading-tight`}>{item.cliente}</h3>
@@ -1887,7 +2178,38 @@ function App() {
                       <span className={`text-[10px] uppercase font-bold ${t.textSecondary}`}>Caixas</span>
                     </div>
                   </div>
-                  <div className="p-4 bg-black/20 text-xs">
+                  <div className={`p-4 ${t.inner} text-xs relative group`}>
+                    <div className="absolute right-4 top-4 flex gap-2 opacity-0 group-hover:opacity-100 transition-all">
+                      <button
+                        onClick={() => {
+                          setFtForm({
+                            id_estoque: item.id_estoque,
+                            id_ft_principal: item.id_produto,
+                            referencia: item.referencia,
+                            peso_conjunto: item.peso_conjunto,
+                            preco_conjunto: item.preco_conjunto,
+                            id_qualidfab: item.qualidade,
+                            id_ondafab: item.onda,
+                            nome_cliente: item.cliente,
+                            gramatura: item.gramatura,
+                            quantidade: item.quantidade,
+                            acao: 'substituir'
+                          });
+                          setModalEstoqueAberto(true);
+                        }}
+                        className="p-2 bg-[#5DD62C]/10 text-[#5DD62C] rounded-md hover:bg-[#5DD62C] hover:text-white"
+                        title="Editar Item"
+                      >
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" /></svg>
+                      </button>
+                      <button
+                        onClick={() => handleExcluirEstoque(item.id_estoque)}
+                        className="p-2 bg-red-500/10 text-red-500 rounded-md hover:bg-red-500 hover:text-white"
+                        title="Excluir Item"
+                      >
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
+                      </button>
+                    </div>
                     <div className="grid grid-cols-2 gap-y-3 gap-x-2">
                       <div>
                         <span className={`block text-[10px] ${t.textSecondary} uppercase mb-0.5`}>Dimensões (C x L x A)</span>
@@ -1940,3 +2262,6 @@ function App() {
 }
 
 export default App;
+
+
+
