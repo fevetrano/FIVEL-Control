@@ -4,13 +4,13 @@ import sqlite3
 import traceback
 import threading
 import time
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 import requests
 # pyrefly: ignore [missing-import]
 from dotenv import load_dotenv
 # pyrefly: ignore [missing-import]
 import fdb
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify, request, send_from_directory
 from flask_cors import CORS
 
 # --- CARREGA O CAMINHO ABSOLUTO DA DLL E SUAS DEPENDÊNCIAS ---
@@ -29,7 +29,10 @@ except Exception as e:
 
 env_path = os.path.join(BASE_DIR, ".env")
 load_dotenv(dotenv_path=env_path)
-app = Flask(__name__)
+dist_local = os.path.join(BASE_DIR, "dist")
+dist_dev = os.path.abspath(os.path.join(BASE_DIR, "..", "frontend", "dist"))
+FRONTEND_DIST = dist_local if os.path.exists(dist_local) else dist_dev
+app = Flask(__name__, static_folder=FRONTEND_DIST, static_url_path="")
 CORS(app)
 
 
@@ -109,6 +112,12 @@ def init_sqlite_db():
                 gramatura TEXT,
                 quantidade REAL,
                 data_criacao TEXT
+            )
+        """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS clientes_ignorados (
+                id_cliente TEXT PRIMARY KEY,
+                data_ignorado TEXT
             )
         """)
         conn.commit()
@@ -1786,6 +1795,187 @@ def optimize_route():
     except Exception as e:
         traceback.print_exc()
         return jsonify({"erro": str(e)}), 500
+
+@app.route("/api/comercial/clientes/<id_cliente>/ignorar", methods=["POST"])
+def ignorar_cliente_comercial(id_cliente):
+    try:
+        dados = request.get_json() or {}
+        ignorar = dados.get("ignorar", True)
+        
+        with db_lock:
+            conn = get_sqlite_conn()
+            cur = conn.cursor()
+            if ignorar:
+                agora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                cur.execute("INSERT OR REPLACE INTO clientes_ignorados (id_cliente, data_ignorado) VALUES (?, ?)", (str(id_cliente), agora))
+            else:
+                cur.execute("DELETE FROM clientes_ignorados WHERE id_cliente = ?", (str(id_cliente),))
+            conn.commit()
+            conn.close()
+        return jsonify({"sucesso": True, "ignorado": ignorar}), 200
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"erro": str(e)}), 500
+
+@app.route("/api/comercial/recorrencia", methods=["GET"])
+def obter_recorrencia_comercial():
+    conn = None
+    try:
+        # 1. Carregar clientes ignorados localmente
+        clientes_ignorados = set()
+        with db_lock:
+            sqlite_conn = get_sqlite_conn()
+            scur = sqlite_conn.cursor()
+            try:
+                scur.execute("SELECT id_cliente FROM clientes_ignorados")
+                for row in scur.fetchall():
+                    clientes_ignorados.add(str(row[0]))
+            except sqlite3.OperationalError:
+                pass
+            sqlite_conn.close()
+
+        conn = get_db_connection()
+        cur = conn.cursor()
+        
+        dois_anos_atras = (datetime.now() - timedelta(days=730)).strftime('%Y-%m-%d')
+        
+        query = f"""
+            SELECT 
+                c.ID_CLIENTE,
+                COALESCE(NULLIF(TRIM(c.GUERRA), ''), c.NOME) AS CLIENTE,
+                c.NOME AS RAZAO_SOCIAL,
+                c.CIDADE,
+                COALESCE(NULLIF(TRIM(c.EMAIL1), ''), NULLIF(TRIM(c.EMAIL2), ''), c.EMAIL_NF1) AS EMAIL,
+                CASE 
+                    WHEN c.FONE_1 IS NOT NULL AND TRIM(c.FONE_1) <> '' THEN
+                        COALESCE('(' || TRIM(c.DDD_FONE_1) || ') ', '') || TRIM(c.FONE_1)
+                    WHEN c.FONE_2 IS NOT NULL AND TRIM(c.FONE_2) <> '' THEN
+                        COALESCE('(' || TRIM(c.DDD_FONE_2) || ') ', '') || TRIM(c.FONE_2)
+                    ELSE NULL
+                END AS TELEFONE,
+                c.CONTATO_1 AS CONTATO,
+                COUNT(p.ID_NUMPED) AS TOTAL_PEDIDOS,
+                MIN(p.EMISSAO) AS PRIMEIRO_PEDIDO,
+                MAX(p.EMISSAO) AS ULTIMO_PEDIDO
+            FROM CLIENTES c
+            JOIN PEDIDOS p ON p.ID_CLIENTE = c.ID_CLIENTE
+            WHERE p.EMISSAO >= '{dois_anos_atras}'
+              AND (p.CANCELADO IS NULL OR p.CANCELADO <> 'S')
+              AND (c.DESATIVADO IS NULL OR c.DESATIVADO <> 'S')
+            GROUP BY 
+                c.ID_CLIENTE, c.GUERRA, c.NOME, c.CIDADE,
+                c.EMAIL1, c.EMAIL2, c.EMAIL_NF1,
+                c.DDD_FONE_1, c.FONE_1, c.DDD_FONE_2, c.FONE_2, c.CONTATO_1
+            HAVING COUNT(p.ID_NUMPED) > 1
+        """
+        
+        cur.execute(query)
+        colunas = [desc[0].lower() for desc in cur.description]
+        registros = cur.fetchall()
+        
+        lista_recorrencia = []
+        resumo = {"Em Dia": 0, "Atenção": 0, "Atrasado": 0, "Total": 0}
+        
+        for reg in registros:
+            row = dict(zip(colunas, reg))
+            id_cliente = str(row.get("id_cliente"))
+            
+            # Filtra ignorados
+            if id_cliente in clientes_ignorados:
+                continue
+                
+            primeiro_pedido = row.get("primeiro_pedido")
+            ultimo_pedido = row.get("ultimo_pedido")
+            total_pedidos = int(row.get("total_pedidos") or 0)
+            
+            if not primeiro_pedido or not ultimo_pedido or total_pedidos <= 1:
+                continue
+                
+            p_date = primeiro_pedido.date() if isinstance(primeiro_pedido, datetime) else primeiro_pedido
+            u_date = ultimo_pedido.date() if isinstance(ultimo_pedido, datetime) else ultimo_pedido
+            
+            dias_totais = (u_date - p_date).days
+            media_dias = dias_totais / (total_pedidos - 1)
+            
+            dias_sem_comprar = (datetime.now().date() - u_date).days
+            
+            # Regras de Faixa de Recorrência
+            if media_dias <= 7:
+                grupo_recorrencia = "1. Até 1 semana"
+            elif media_dias <= 14:
+                grupo_recorrencia = "2. 1 a 2 semanas"
+            elif media_dias <= 28:
+                grupo_recorrencia = "3. 3 a 4 semanas (Mensal)"
+            elif media_dias <= 60:
+                grupo_recorrencia = "4. Bimestral (2 meses)"
+            elif media_dias <= 90:
+                grupo_recorrencia = "5. Trimestral (3 meses)"
+            elif media_dias <= 180:
+                grupo_recorrencia = "6. Semestral (4 a 6 meses)"
+            else:
+                grupo_recorrencia = "7. Acima de 6 meses"
+                
+            # Calcular Próxima Compra
+            data_prevista = ""
+            raw_prevista = ""
+            if ultimo_pedido and isinstance(ultimo_pedido, (datetime, date)):
+                try:
+                    up_date = ultimo_pedido.date() if isinstance(ultimo_pedido, datetime) else ultimo_pedido
+                    dt_prevista = up_date + timedelta(days=round(media_dias))
+                    data_prevista = dt_prevista.strftime("%d/%m/%Y")
+                    raw_prevista = dt_prevista.strftime("%Y-%m-%d")
+                except Exception:
+                    pass
+                    
+            # Status de Risco
+            if dias_sem_comprar <= media_dias:
+                status_risco = "Em Dia"
+            elif dias_sem_comprar <= (media_dias * 1.5):
+                status_risco = "Atenção"
+            else:
+                status_risco = "Atrasado"
+                
+            resumo[status_risco] += 1
+            resumo["Total"] += 1
+            
+            lista_recorrencia.append({
+                "id_cliente": id_cliente,
+                "cliente": limpar_texto(row.get("cliente")),
+                "razao_social": limpar_texto(row.get("razao_social")),
+                "cidade": limpar_texto(row.get("cidade")),
+                "email": limpar_texto(row.get("email")),
+                "telefone": limpar_texto(row.get("telefone")),
+                "contato": limpar_texto(row.get("contato")),
+                "total_pedidos": int(row.get("total_pedidos") or 0),
+                "primeiro_pedido": format_date_safe(row.get("primeiro_pedido")),
+                "ultimo_pedido": format_date_safe(row.get("ultimo_pedido")),
+                "media_dias": round(media_dias, 1),
+                "dias_sem_comprar": dias_sem_comprar,
+                "grupo_recorrencia": grupo_recorrencia,
+                "data_prevista": data_prevista,
+                "raw_prevista": raw_prevista,
+                "status_risco": status_risco
+            })
+            
+        return jsonify({
+            "clientes": lista_recorrencia,
+            "resumo": resumo
+        }), 200
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"erro": str(e)}), 500
+    finally:
+        if conn:
+            conn.close()
+
+@app.route("/", defaults={"path": ""})
+@app.route("/<path:path>")
+def serve_frontend(path):
+    if path != "" and os.path.exists(os.path.join(app.static_folder, path)):
+        return send_from_directory(app.static_folder, path)
+    if os.path.exists(os.path.join(app.static_folder, "index.html")):
+        return send_from_directory(app.static_folder, "index.html")
+    return jsonify({"mensagem": "API do FIVEL Control ativa. Frontend dist não encontrado."}), 200
 
 if __name__ == "__main__":
     app.run(debug=False, host="0.0.0.0", port=5000, threaded=True)

@@ -1,27 +1,33 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import axios from 'axios'
-import { MapContainer, TileLayer, Marker, Popup, Polyline, useMap } from 'react-leaflet'
-import L from 'leaflet'
-
-import markerIcon from 'leaflet/dist/images/marker-icon.png'
-import markerShadow from 'leaflet/dist/images/marker-shadow.png'
-
-let DefaultIcon = L.icon({
-  iconUrl: markerIcon,
-  shadowUrl: markerShadow,
-  iconSize: [25, 41],
-  iconAnchor: [12, 41]
-});
-L.Marker.prototype.options.icon = DefaultIcon;
+import { APIProvider, Map, AdvancedMarker, InfoWindow, Pin, useMap as useGoogleMap } from '@vis.gl/react-google-maps'
 
 const COORDENADAS_EMPRESA = [-23.70938551545255, -46.59345608749334]
-const API_URL = 'http://192.168.1.34:5000'
+const API_URL = (window.location.port === '5000')
+  ? window.location.origin
+  : `http://${window.location.hostname || 'localhost'}:5000`;
 
-function RedimensionarMapa() {
-  const map = useMap();
+function MapPolyline({ positions, color, weight }) {
+  const map = useGoogleMap();
+
   useEffect(() => {
-    setTimeout(() => map.invalidateSize(), 100);
-  }, [map]);
+    if (!map || !positions || positions.length === 0 || !window.google) return;
+
+    const path = positions.map(p => Array.isArray(p) ? { lat: p[0], lng: p[1] } : p);
+
+    const polyline = new window.google.maps.Polyline({
+      path,
+      strokeColor: color,
+      strokeWeight: weight,
+      strokeOpacity: 0.95,
+      map
+    });
+
+    return () => {
+      polyline.setMap(null);
+    };
+  }, [map, positions, color, weight]);
+
   return null;
 }
 
@@ -38,6 +44,7 @@ function App() {
   const [rotaVoltaGeometria, setRotaVoltaGeometria] = useState([])
   const [ordemEntregas, setOrdemEntregas] = useState([])
   const [limiteExibicao, setLimiteExibicao] = useState(20)
+  const [mapaInfoWindowAberto, setMapaInfoWindowAberto] = useState(null)
 
   const [modoPesoAberto, setModoPesoAberto] = useState('total');
   const [filtroStatusPedido, setFiltroStatusPedido] = useState('aberto');
@@ -90,6 +97,39 @@ function App() {
   const [calendarioPesosData, setCalendarioPesosData] = useState({ mes: new Date().getMonth() + 1, ano: new Date().getFullYear(), carregando: false, dados: null });
   const [modoPesoCalendario, setModoPesoCalendario] = useState('total');
 
+  const [dadosRecorrencia, setDadosRecorrencia] = useState([]);
+  const [resumoRecorrencia, setResumoRecorrencia] = useState({ "Em Dia": 0, "Atenção": 0, "Atrasado": 0, "Total": 0 });
+  const [filtroBuscaRecorrencia, setFiltroBuscaRecorrencia] = useState("");
+  const [filtroFaixaRecorrencia, setFiltroFaixaRecorrencia] = useState("Todos");
+  const [filtroStatusRecorrencia, setFiltroStatusRecorrencia] = useState("Todos");
+
+  const carregarRecorrencia = useCallback(() => {
+    setCarregando(true);
+    axios.get(`${API_URL}/api/comercial/recorrencia`)
+      .then(res => {
+        setDadosRecorrencia(res.data.clientes || []);
+        setResumoRecorrencia(res.data.resumo || { "Em Dia": 0, "Atenção": 0, "Atrasado": 0, "Total": 0 });
+        setCarregando(false);
+      })
+      .catch(err => {
+        console.error("Erro ao carregar comercial:", err);
+        setCarregando(false);
+      });
+  }, []);
+
+  const ocultarClienteComercial = (id_cliente) => {
+    if (window.confirm("Deseja realmente ocultar este cliente da aba Comercial?")) {
+      axios.post(`${API_URL}/api/comercial/clientes/${id_cliente}/ignorar`, { ignorar: true })
+        .then(() => {
+          carregarRecorrencia();
+        })
+        .catch(err => {
+          console.error("Erro ao ocultar cliente:", err);
+          alert("Erro ao ocultar cliente.");
+        });
+    }
+  };
+
   const carregarCalendarioPesos = useCallback(() => {
     setCalendarioPesosData(prev => ({ ...prev, carregando: true }));
     axios.get(`${API_URL}/api/calendario_pesos?mes=${calendarioPesosData.mes}&ano=${calendarioPesosData.ano}`)
@@ -105,8 +145,10 @@ function App() {
   useEffect(() => {
     if (abaAtiva === 'calendario') {
       carregarCalendarioPesos();
+    } else if (abaAtiva === 'comercial') {
+      carregarRecorrencia();
     }
-  }, [abaAtiva, calendarioPesosData.mes, calendarioPesosData.ano, carregarCalendarioPesos]);
+  }, [abaAtiva, calendarioPesosData.mes, calendarioPesosData.ano, carregarCalendarioPesos, carregarRecorrencia]);
 
   const [textoNotaTemp, setTextoNotaTemp] = useState("")
 
@@ -1090,6 +1132,7 @@ function App() {
         <button onClick={() => alterarAba('compras')} className={`pb-3 px-4 font-medium text-sm transition-colors relative whitespace-nowrap ${abaAtiva === 'compras' ? `${t.textAccent} border-b-2 ${t.borderAccent}` : `${t.textSecondary} hover:${t.textPrimary}`}`}>Compras</button>
         <button onClick={() => alterarAba('estoque')} className={`pb-3 px-4 font-medium text-sm transition-colors relative whitespace-nowrap ${abaAtiva === 'estoque' ? `${t.textAccent} border-b-2 ${t.borderAccent}` : `${t.textSecondary} hover:${t.textPrimary}`}`}>Estoque de Caixas</button>
         <button onClick={() => alterarAba('dashboard')} className={`pb-3 px-4 font-medium text-sm transition-colors relative whitespace-nowrap ${abaAtiva === 'dashboard' ? `${t.textAccent} border-b-2 ${t.borderAccent}` : `${t.textSecondary} hover:${t.textPrimary}`}`}>Dashboard</button>
+        <button onClick={() => alterarAba('comercial')} className={`pb-3 px-4 font-medium text-sm transition-colors relative whitespace-nowrap ${abaAtiva === 'comercial' ? `${t.textAccent} border-b-2 ${t.borderAccent}` : `${t.textSecondary} hover:${t.textPrimary}`}`}>Comercial</button>
       </div>
 
       <main className="w-full mx-auto relative z-0">
@@ -1210,36 +1253,80 @@ function App() {
                   <h2 className={`text-lg font-bold ${t.textPrimary}`}>Mapa de Entregas</h2>
                 </div>
                 <div className={`h-full w-full relative z-10 ${t.bg}`}>
-                  <MapContainer center={COORDENADAS_EMPRESA} zoom={10} className="h-full w-full" scrollWheelZoom={false}>
-                    <RedimensionarMapa />
-                    <TileLayer url={isDarkMode ? "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png" : "https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png"} />
-                    <Marker position={COORDENADAS_EMPRESA}>
-                      <Popup><div className="text-gray-900 p-1"><strong className="text-[#337418]">Minha Empresa</strong><br /><span className="text-xs text-gray-600">Partida</span></div></Popup>
-                    </Marker>
-                    {pedidosProntosParaMapa.map((pedido) => {
-                      return pedido.latitude && (
-                        <Marker key={pedido.id} position={[pedido.latitude, pedido.longitude]}>
-                          <Popup><div className="text-gray-900 p-1"><strong className="text-base">{pedido.cliente}</strong><hr className="my-1 border-gray-200" /><p className="text-xs m-0">Ped: {pedido.id_pedido}</p><p className="text-xs m-0">Carga: {formatarKg(pedido.peso_total_kg)} kg</p></div></Popup>
-                        </Marker>
-                      )
-                    })}
-                    {rotaIdaGeometria.length > 0 && <Polyline key={`ida`} positions={rotaIdaGeometria} pathOptions={{ color: '#5DD62C', weight: 5, opacity: 0.95 }} />}
-                    {rotaVoltaGeometria.length > 0 && <Polyline key={`volta`} positions={rotaVoltaGeometria} pathOptions={{ color: '#337418', weight: 5, opacity: 0.95 }} />}
-                  </MapContainer>
+                  <APIProvider apiKey={import.meta.env.VITE_GOOGLE_MAPS_API_KEY}>
+                    <Map
+                      defaultCenter={{ lat: COORDENADAS_EMPRESA[0], lng: COORDENADAS_EMPRESA[1] }}
+                      defaultZoom={10}
+                      className="h-full w-full"
+                      gestureHandling={'greedy'}
+                      disableDefaultUI={true}
+                      mapId="DEMO_MAP_ID"
+                      colorScheme={isDarkMode ? "DARK" : "LIGHT"}
+                    >
+                      <AdvancedMarker position={{ lat: COORDENADAS_EMPRESA[0], lng: COORDENADAS_EMPRESA[1] }}>
+                        <Pin background={'#337418'} borderColor={'#1a3d0c'} glyphColor={'#ffffff'} />
+                      </AdvancedMarker>
+
+                      {pedidosProntosParaMapa.map((pedido) => {
+                        if (!pedido.latitude) return null;
+
+                        const isRoteirizado = ordemEntregas.includes(pedido.id);
+                        const ordemCarregamento = isRoteirizado ? ordemEntregas.indexOf(pedido.id) + 1 : 0;
+                        const ordemEntrega = isRoteirizado ? ordemEntregas.length - ordemCarregamento + 1 : 0;
+
+                        return (
+                          <AdvancedMarker
+                            key={pedido.id}
+                            position={{ lat: pedido.latitude, lng: pedido.longitude }}
+                            onClick={() => setMapaInfoWindowAberto(pedido.id)}
+                          >
+                            <Pin background={isRoteirizado ? '#F59E0B' : '#EA4335'} borderColor={isRoteirizado ? '#B45309' : '#C5221F'} glyphColor={'#ffffff'} glyph={isRoteirizado ? String(ordemEntrega) : 'P'} />
+                            {mapaInfoWindowAberto === pedido.id && (
+                              <InfoWindow position={{ lat: pedido.latitude, lng: pedido.longitude }} onCloseClick={() => setMapaInfoWindowAberto(null)}>
+                                <div className="text-gray-900 p-1">
+                                  <strong className="text-base">{pedido.cliente}</strong>
+                                  <hr className="my-1 border-gray-200" />
+                                  <p className="text-xs m-0">Ped: {pedido.id_pedido}</p>
+                                  <p className="text-xs m-0">Carga: {formatarKg(pedido.peso_total_kg)} kg</p>
+                                  {isRoteirizado && (
+                                    <div className="mt-2 p-1.5 bg-gray-50 rounded border border-gray-200">
+                                      <p className="text-[11px] m-0 font-bold text-amber-600">Ordem de Entrega: {ordemEntrega}</p>
+                                      <p className="text-[11px] m-0 font-bold text-[#337418]">Ordem de Carga: {ordemCarregamento}</p>
+                                    </div>
+                                  )}
+                                </div>
+                              </InfoWindow>
+                            )}
+                          </AdvancedMarker>
+                        )
+                      })}
+                      {rotaIdaGeometria.length > 0 && <MapPolyline positions={rotaIdaGeometria} color="#5DD62C" weight={5} />}
+                      {rotaVoltaGeometria.length > 0 && <MapPolyline positions={rotaVoltaGeometria} color="#337418" weight={5} />}
+                    </Map>
+                  </APIProvider>
                 </div>
               </div>
 
               <div className={`${t.card} p-5 md:p-6 rounded-2xl shadow-md w-full border ${t.border}`}>
-                <div className={`border-b ${t.border} pb-3 mb-5`}><h2 className={`text-lg font-bold ${t.textPrimary}`}>Sequenciamento LIFO</h2></div>
+                <div className={`border-b ${t.border} pb-3 mb-5 flex justify-between items-center`}>
+                  <h2 className={`text-lg font-bold ${t.textPrimary}`}>Roteirização LIFO</h2>
+                  <span className={`text-xs ${t.textSecondary}`}>Carregamento vs Entrega</span>
+                </div>
                 <div className="space-y-6 text-sm">
                   <div className="flex flex-col gap-3">
                     {ordemEntregas.length > 0 ? (
                       ordemEntregas.map((id, index) => {
                         const pedido = pedidos.find(p => p && p.id === id);
+                        const ordemCarregamento = index + 1;
+                        const ordemEntrega = ordemEntregas.length - index;
+
                         return (
                           <div key={id} className={`flex items-center justify-between p-3.5 ${t.inner} border ${t.border} rounded-xl ${t.hoverBorderAccent} transition-colors`}>
                             <div className="flex items-center gap-3.5">
-                              <span className={`w-7 h-7 rounded-full ${t.bgAccentSoft} ${t.textAccent} font-mono text-xs flex items-center justify-center font-bold border ${t.borderAccentSoft}`}>{index + 1}</span>
+                              <div className="flex flex-col items-center justify-center gap-1">
+                                <span title="Ordem de Carregamento (Colocar no Caminhão)" className={`w-7 h-7 rounded-full ${t.bgAccentSoft} ${t.textAccent} font-mono text-xs flex items-center justify-center font-bold border ${t.borderAccentSoft}`}>C:{ordemCarregamento}</span>
+                                <span title="Ordem de Entrega (Retirar do Caminhão)" className={`w-7 h-7 rounded-full bg-amber-500/10 text-amber-500 font-mono text-xs flex items-center justify-center font-bold border border-amber-500/20`}>E:{ordemEntrega}</span>
+                              </div>
                               <div>
                                 <div className={`font-bold ${t.textPrimary} text-sm line-clamp-1`}>{pedido?.cliente || 'Cliente'}</div>
                                 <div className={`text-[11px] ${t.textSecondary} font-mono mt-0.5`}>PEDIDO {pedido?.id_pedido}</div>
@@ -1272,6 +1359,8 @@ function App() {
               String(of.referencia || '').toLowerCase().includes(termo);
           });
 
+          const pesoTotalEmProducao = ofsEmProducaoFiltradas.reduce((acc, of) => acc + (parseFloat(of.peso_restante) || 0), 0);
+
           return (
             <div className="space-y-6 w-full relative z-0">
               <div className={`flex flex-col md:flex-row justify-between items-start md:items-center mb-6 gap-4 border-b ${t.border} pb-5`}>
@@ -1286,7 +1375,10 @@ function App() {
                     <input type="text" value={termoPesquisaProducao} onChange={(e) => setTermoPesquisaProducao(e.target.value)} placeholder="Buscar OF, Pedido ou Cliente..." className={`w-full pl-9 pr-3 py-3 md:py-2 bg-transparent border ${t.border} rounded-lg text-xs md:text-sm ${t.textPrimary} focus:outline-none focus:border-purple-500`} />
                   </div>
                   <div className={`${t.bgAccentSoft} ${t.textAccent} font-mono px-5 py-2.5 rounded-xl text-lg font-bold border ${t.borderAccentSoft} whitespace-nowrap`}>
-                    {ofsEmProducaoFiltradas.length} OFs em Produção
+                    {ofsEmProducaoFiltradas.length} OFs
+                  </div>
+                  <div className={`bg-purple-500/10 text-purple-500 font-mono px-5 py-2.5 rounded-xl text-lg font-bold border border-purple-500/20 whitespace-nowrap`}>
+                    {formatarKg(pesoTotalEmProducao)} kg
                   </div>
                 </div>
               </div>
@@ -1733,12 +1825,12 @@ function App() {
                                               <td className={`py-3 px-3 text-right font-mono font-bold ${t.textPrimary}`}>R$ {((qtdExibir || 0) * (item.preco_unitario || 0)).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
                                               <td className="py-3 px-3 text-center">
                                                 <select value={item.statusOF || 'Pendente'} onChange={(e) => alternarStatusOf(pedido.id, item.id_numof, e.target.value)} className={`text-[10px] font-bold rounded-full px-2.5 py-1.5 border cursor-pointer focus:outline-none ${obterEstiloStatusCompleto(item.statusOF)}`}>
-                                                  <option value="Pendente" className={`${t.card} text-amber-500`}>O Pendente</option>
+                                                  <option value="Pendente" className={`${t.card} text-amber-500`}>Pendente</option>
                                                   <option value="Compras" className={`${t.card} text-sky-500`}>{item.id_compra && item.statusOF === 'Compras' ? `Compras (OC: ${item.id_compra})` : 'Compras'}</option>
                                                   <option value="Produção" className={`${t.card} text-purple-500`}>Produção</option>
                                                   <option value="Parcial" className={`${t.card} text-teal-500`}>Parcial</option>
-                                                  <option value="Pronto" className={`${t.card} ${t.textAccent}`}>✓ Concluído</option>
-                                                  <option value="Faturada" className={`${t.card} text-gray-500`}>Faturada (Entregue)</option>
+                                                  <option value="Pronto" className={`${t.card} ${t.textAccent}`}>Pronto</option>
+                                                  <option value="Faturada" className={`${t.card} text-gray-500`}>Faturada</option>
                                                 </select>
                                               </td>
                                             </tr>
@@ -2255,6 +2347,147 @@ function App() {
             )}
           </div>
         )}
+
+        {/* ABA COMERCIAL */}
+        {abaAtiva === 'comercial' && (() => {
+          const dadosFiltrados = dadosRecorrencia.filter(c => {
+            if (filtroStatusRecorrencia !== "Todos" && c.status_risco !== filtroStatusRecorrencia) return false;
+            if (filtroFaixaRecorrencia !== "Todos" && c.grupo_recorrencia !== filtroFaixaRecorrencia) return false;
+            if (filtroBuscaRecorrencia) {
+              const termo = filtroBuscaRecorrencia.toLowerCase();
+              if (!((c.cliente || "").toLowerCase().includes(termo) ||
+                (c.razao_social || "").toLowerCase().includes(termo) ||
+                (c.cidade || "").toLowerCase().includes(termo))) {
+                return false;
+              }
+            }
+            return true;
+          });
+
+          return (
+            <div className="space-y-6">
+              <div className={`flex justify-between items-center border-b ${t.border} pb-4`}>
+                <div>
+                  <h2 className={`text-xl font-bold ${t.textPrimary}`}>Análise Comercial</h2>
+                </div>
+              </div>
+
+              {/* KPIs */}
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                <div className={`${t.card} p-5 rounded-2xl border ${t.border} shadow-sm text-center`}>
+                  <p className={`text-xs font-bold ${t.textSecondary} uppercase mb-1`}>Total Monitorados</p>
+                  <p className={`text-3xl font-bold ${t.textPrimary}`}>{resumoRecorrencia.Total || 0}</p>
+                </div>
+                <div className={`${t.card} p-5 rounded-2xl border ${t.border} shadow-sm text-center border-b-4 border-b-[#5DD62C]`}>
+                  <p className={`text-xs font-bold text-[#5DD62C] uppercase mb-1`}>Em Dia</p>
+                  <p className={`text-3xl font-bold ${t.textPrimary}`}>{resumoRecorrencia["Em Dia"] || 0}</p>
+                </div>
+                <div className={`${t.card} p-5 rounded-2xl border ${t.border} shadow-sm text-center border-b-4 border-b-amber-500`}>
+                  <p className={`text-xs font-bold text-amber-500 uppercase mb-1`}>Atenção</p>
+                  <p className={`text-3xl font-bold ${t.textPrimary}`}>{resumoRecorrencia["Atenção"] || 0}</p>
+                </div>
+                <div className={`${t.card} p-5 rounded-2xl border ${t.border} shadow-sm text-center border-b-4 border-b-red-500`}>
+                  <p className={`text-xs font-bold text-red-500 uppercase mb-1`}>Atrasados</p>
+                  <p className={`text-3xl font-bold ${t.textPrimary}`}>{resumoRecorrencia["Atrasado"] || 0}</p>
+                </div>
+              </div>
+
+              {/* Filters */}
+              <div className={`flex flex-col md:flex-row gap-4 p-4 ${t.card} border ${t.border} rounded-xl`}>
+                <div className="flex-1">
+                  <input type="text" placeholder="Buscar Cliente ou Cidade..." value={filtroBuscaRecorrencia} onChange={e => setFiltroBuscaRecorrencia(e.target.value)} className={`w-full p-2.5 rounded-lg border ${t.border} ${t.bg} ${t.textPrimary} text-sm focus:outline-none focus:border-[#5DD62C]`} />
+                </div>
+                <div className="flex gap-2">
+                  <select value={filtroFaixaRecorrencia} onChange={e => setFiltroFaixaRecorrencia(e.target.value)} className={`p-2.5 rounded-lg border ${t.border} ${t.bg} ${t.textPrimary} text-sm focus:outline-none focus:border-[#5DD62C]`}>
+                    <option value="Todos">Todas as Faixas</option>
+                    <option value="1. Até 1 semana">Até 1 semana</option>
+                    <option value="2. 1 a 2 semanas">1 a 2 semanas</option>
+                    <option value="3. 3 a 4 semanas (Mensal)">Mensal (3 a 4 sem)</option>
+                    <option value="4. Bimestral (2 meses)">Bimestral (2 meses)</option>
+                    <option value="5. Trimestral (3 meses)">Trimestral (3 meses)</option>
+                    <option value="6. Semestral (4 a 6 meses)">Semestral (4 a 6 meses)</option>
+                    <option value="7. Acima de 6 meses">Acima de 6 meses</option>
+                  </select>
+                  <div className={`flex border ${t.border} rounded-lg overflow-hidden`}>
+                    {["Todos", "Em Dia", "Atenção", "Atrasado"].map(status => (
+                      <button key={status} onClick={() => setFiltroStatusRecorrencia(status)} className={`px-4 py-2.5 text-sm font-bold transition-colors ${filtroStatusRecorrencia === status ? 'bg-[#5DD62C] text-[#0F0F0F]' : `${t.bg} ${t.textSecondary} hover:${t.textPrimary}`}`}>{status}</button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              {/* Tabela */}
+              <div className={`${t.card} rounded-xl border ${t.border} overflow-hidden`}>
+                <div className="overflow-x-auto w-full scrollbar-hide">
+                  <table className="w-full text-left text-sm whitespace-nowrap">
+                    <thead className={`${t.innerAlt} ${t.textSecondary} text-[11px] uppercase border-b ${t.border}`}>
+                      <tr>
+                        <th className="p-4 font-bold">Cliente</th>
+                        <th className="p-4 font-bold">Cidade</th>
+                        <th className="p-4 font-bold text-center">Média Ciclo</th>
+                        <th className="p-4 font-bold text-center">Último Ped.</th>
+                        <th className="p-4 font-bold text-center">Dias s/ Comprar</th>
+                        <th className="p-4 font-bold text-center">Previsão</th>
+                        <th className="p-4 font-bold text-center">Status</th>
+                        <th className="p-4 font-bold text-center">Ações</th>
+                      </tr>
+                    </thead>
+                    <tbody className={`divide-y ${t.divider}`}>
+                      {dadosFiltrados.map((c, i) => {
+                        let corStatus = "";
+                        if (c.status_risco === "Em Dia") corStatus = "bg-[#5DD62C]/20 text-[#5DD62C] border-[#5DD62C]/30";
+                        else if (c.status_risco === "Atenção") corStatus = "bg-amber-500/20 text-amber-500 border-amber-500/30";
+                        else corStatus = "bg-red-500/20 text-red-500 border-red-500/30";
+
+                        const numeroWhats = c.telefone ? c.telefone.replace(/\D/g, '') : '';
+                        const linkWhats = numeroWhats ? `https://wa.me/55${numeroWhats}` : null;
+                        const linkEmail = c.email ? `mailto:${c.email}?subject=Ruycepel%20Embalagens%20-%20Acompanhamento` : null;
+
+                        return (
+                          <tr key={c.id_cliente} className={`${t.hoverCard} transition-colors`}>
+                            <td className="p-4">
+                              <p className={`font-bold ${t.textPrimary}`}>{c.cliente}</p>
+                              {c.razao_social !== c.cliente && <p className={`text-[10px] ${t.textSecondary}`}>{c.razao_social}</p>}
+                            </td>
+                            <td className={`p-4 ${t.textSecondary} text-xs`}>{c.cidade}</td>
+                            <td className="p-4 text-center">
+                              <p className={`font-mono font-bold ${t.textPrimary}`}>{c.media_dias} dias</p>
+                              <p className={`text-[10px] ${t.textSecondary}`}>{c.grupo_recorrencia}</p>
+                            </td>
+                            <td className={`p-4 text-center font-mono ${t.textSecondary}`}>{c.ultimo_pedido}</td>
+                            <td className={`p-4 text-center font-mono font-bold ${c.status_risco === 'Atrasado' ? 'text-red-500' : t.textPrimary}`}>{c.dias_sem_comprar}</td>
+                            <td className={`p-4 text-center font-mono font-bold ${t.textAccent}`}>{c.data_prevista || '-'}</td>
+                            <td className="p-4 text-center">
+                              <span className={`px-2.5 py-1 text-[10px] font-bold uppercase rounded-full border ${corStatus}`}>{c.status_risco}</span>
+                            </td>
+                            <td className="p-4 text-center space-x-2">
+                              {linkWhats && (
+                                <a href={linkWhats} target="_blank" rel="noreferrer" title="Chamar no WhatsApp" className="inline-block p-1.5 bg-green-500/10 text-green-500 rounded hover:bg-green-500 hover:text-white transition-colors">
+                                  <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51a12.8 12.8 0 00-.57-.01c-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413Z" /></svg>
+                                </a>
+                              )}
+                              {linkEmail && (
+                                <a href={linkEmail} target="_blank" rel="noreferrer" title="Enviar E-mail" className="inline-block p-1.5 bg-blue-500/10 text-blue-500 rounded hover:bg-blue-500 hover:text-white transition-colors">
+                                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" /></svg>
+                                </a>
+                              )}
+                              <button onClick={() => ocultarClienteComercial(c.id_cliente)} title="Ocultar Cliente (Ignorar)" className="inline-block p-1.5 bg-gray-500/10 text-gray-500 rounded hover:bg-gray-500 hover:text-white transition-colors">
+                                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l3.59 3.59m0 0A9.953 9.953 0 0112 5c4.478 0 8.268 2.943 9.543 7a10.025 10.025 0 01-4.132 5.411m0 0L21 21" /></svg>
+                              </button>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                      {dadosFiltrados.length === 0 && (
+                        <tr><td colSpan="8" className={`p-8 text-center ${t.textSecondary}`}>Nenhum cliente encontrado.</td></tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          )
+        })()}
 
       </main>
     </div>
