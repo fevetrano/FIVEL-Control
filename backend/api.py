@@ -67,12 +67,17 @@ def erro_interno(e):
 # --- LOGIN E PERMISSÕES ---
 auth.init_tabelas()
 
-# Perfil Vendas: só consulta Pedidos, Produção, Orçamentos e Comercial, sem valores nem pesos.
-ENDPOINTS_VENDAS = {"obter_pedidos", "obter_orcamentos", "obter_recorrencia_comercial", "auth_eu", "logout"}
+# Perfil Vendas: Pedidos, Produção, Orçamentos e Comercial (pode alterar), sem pesos nem valores
+# dos pedidos. Nos orçamentos vê o preço, mas não o peso.
+ENDPOINTS_VENDAS = {
+    "obter_pedidos", "obter_orcamentos", "obter_recorrencia_comercial", "auth_eu", "logout",
+    "atualizar_status_unidade", "atualizar_status_of",
+    "atualizar_nota_orcamento", "atualizar_status_orcamento", "ignorar_cliente_comercial",
+}
 CAMPOS_OCULTOS_VENDAS = {
     "peso_total_kg", "peso_total_pedido_bruto", "faturamento_total",
     "peso_of", "peso_restante", "preco_unitario",
-    "total_geral", "total_peso", "vl_unit", "vl_tot",
+    "total_peso",
 }
 
 
@@ -112,8 +117,11 @@ def pos_requisicao(resposta):
         resposta.set_data(app.json.dumps(ocultar_valores(resposta.get_json())))
     # Auditoria: quem fez cada alteração bem-sucedida.
     if request.method in ("POST", "PUT", "DELETE") and resposta.status_code < 400 and request.endpoint != "logout":
+        detalhes = request.get_json(silent=True)
+        if isinstance(detalhes, dict) and "senha" in detalhes:
+            detalhes = {**detalhes, "senha": "***"}
         try:
-            auth.registrar_auditoria(usuario["login"], f"{request.method} {request.path}", request.get_json(silent=True))
+            auth.registrar_auditoria(usuario["login"], f"{request.method} {request.path}", detalhes)
         except Exception as e:
             logger.error("Falha ao registrar auditoria", exc_info=e)
     return resposta
@@ -146,6 +154,37 @@ def auth_eu():
 def logout():
     auth.encerrar_sessao(_token_da_requisicao())
     auth.registrar_auditoria(g.usuario["login"], "logout")
+    return jsonify({"sucesso": True}), 200
+
+
+# Cadastro de usuários (só Admin: estas rotas não estão em ENDPOINTS_VENDAS).
+@app.route("/api/usuarios", methods=["GET"])
+def listar_usuarios():
+    return jsonify(auth.listar_usuarios()), 200
+
+
+@app.route("/api/usuarios", methods=["POST"])
+def criar_usuario():
+    dados = request.get_json(silent=True) or {}
+    try:
+        auth.criar_usuario(dados.get("nome"), dados.get("login"), dados.get("senha"), dados.get("perfil"))
+    except ValueError as e:
+        return jsonify({"erro": str(e)}), 400
+    return jsonify({"sucesso": True}), 201
+
+
+@app.route("/api/usuarios/<login>", methods=["PUT"])
+def atualizar_usuario(login):
+    dados = request.get_json(silent=True) or {}
+    if login.strip().lower() == g.usuario["login"] and dados.get("ativo") is False:
+        return jsonify({"erro": "Você não pode desativar o seu próprio usuário."}), 400
+    try:
+        if dados.get("senha"):
+            auth.alterar_senha(login, dados["senha"])
+        if "ativo" in dados:
+            auth.definir_ativo(login, bool(dados["ativo"]))
+    except ValueError as e:
+        return jsonify({"erro": str(e)}), 400
     return jsonify({"sucesso": True}), 200
 
 
@@ -2090,7 +2129,10 @@ def obter_recorrencia_comercial():
             FROM CLIENTES c
             JOIN PEDIDOS p ON p.ID_CLIENTE = c.ID_CLIENTE
             WHERE p.EMISSAO >= '{dois_anos_atras}'
+              AND p.ID_EMPRESA IN (1, 2)
               AND (p.CANCELADO IS NULL OR p.CANCELADO <> 'S')
+              AND (p.PEDIDO_BLOQUEADO IS NULL OR p.PEDIDO_BLOQUEADO <> 'S')
+              AND (p.DESATIVADO IS NULL OR p.DESATIVADO <> 'S')
               AND (c.DESATIVADO IS NULL OR c.DESATIVADO <> 'S')
             GROUP BY 
                 c.ID_CLIENTE, c.GUERRA, c.NOME, c.CIDADE,

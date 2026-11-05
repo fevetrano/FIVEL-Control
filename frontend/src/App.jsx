@@ -3,6 +3,7 @@ import axios from 'axios'
 import { APIProvider, Map, AdvancedMarker, InfoWindow, Pin, useMap as useGoogleMap } from '@vis.gl/react-google-maps'
 
 import { API_URL } from './api.js'
+import GerenciarUsuarios from './GerenciarUsuarios.jsx'
 
 const COORDENADAS_EMPRESA = [-23.70938551545255, -46.59345608749334]
 
@@ -88,6 +89,7 @@ function App({ usuario, onSair }) {
   const [empresaFiltro, setEmpresaFiltro] = useState('total');
 
   const [modalEstoqueAberto, setModalEstoqueAberto] = useState(false);
+  const [modalUsuariosAberto, setModalUsuariosAberto] = useState(false);
   const [ftForm, setFtForm] = useState({ id_estoque: '', id_ft_principal: '', referencia: '', peso_conjunto: '', preco_conjunto: '', id_qualidfab: '', id_ondafab: '', nome_cliente: '', gramatura: '', quantidade: '', acao: 'novo' });
   const [buscandoFt, setBuscandoFt] = useState(false);
 
@@ -335,6 +337,7 @@ function App({ usuario, onSair }) {
   };
 
   const carregarResumos = useCallback(() => {
+    if (!ehAdmin) return;
     Promise.all([
       axios.get(`${API_URL}/api/resumo/mapa`),
       axios.get(`${API_URL}/api/resumo/dashboard`)
@@ -354,7 +357,7 @@ function App({ usuario, onSair }) {
         }))
       }
     }).catch(err => console.error("Erro API Resumos:", err))
-  }, [])
+  }, [ehAdmin])
 
   useEffect(() => {
     const pedidosAtivosGerais = pedidos.filter(p => p.status !== 'Faturada');
@@ -1001,10 +1004,13 @@ function App({ usuario, onSair }) {
 
           <div className={`flex items-center justify-between sm:justify-center gap-3 ${t.card} pl-4 pr-1.5 py-1.5 rounded-xl border ${t.border} shadow-sm w-full sm:w-auto`}>
             <span className={`text-xs font-bold ${t.textPrimary} truncate max-w-[160px]`} title={usuario?.login}>{usuario?.nome}</span>
+            {ehAdmin && <button onClick={() => setModalUsuariosAberto(true)} className={`px-3 py-2 sm:py-1 rounded-lg text-xs font-bold ${t.textSecondary} hover:text-[#5DD62C] border ${t.border} transition-colors`}>Usuários</button>}
             <button onClick={onSair} className={`px-3 py-2 sm:py-1 rounded-lg text-xs font-bold ${t.textSecondary} hover:text-red-400 border ${t.border} transition-colors`}>Sair</button>
           </div>
         </div>
       </header>
+
+      {modalUsuariosAberto && <GerenciarUsuarios t={t} usuarioAtual={usuario} onFechar={() => setModalUsuariosAberto(false)} />}
 
       {/* MODAL BIPADOR OTIMIZADO */}
       {modalBipadorAberto && (
@@ -1484,7 +1490,7 @@ function App({ usuario, onSair }) {
                         </div>
                       </div>
 
-                      {ehAdmin && <div className="flex gap-2 justify-end mt-auto">
+                      <div className="flex gap-2 justify-end mt-auto">
                         <button
                           onClick={() => alternarStatusOf(of.pedido.id, of.id_numof, 'Pendente')}
                           className={`px-3 py-2.5 rounded-lg text-[10px] font-bold border transition-all bg-amber-500/10 text-amber-500 border-amber-500/20 hover:bg-amber-500/20`}
@@ -1498,7 +1504,7 @@ function App({ usuario, onSair }) {
                         >
                           <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7" /></svg> Marcar Pronto
                         </button>
-                      </div>}
+                      </div>
                     </div>
                   )
                 })}
@@ -1565,8 +1571,7 @@ function App({ usuario, onSair }) {
                             <select
                               value={orc.status || 'Em Aberto'}
                               onChange={(e) => atualizarStatusOrcamento(orc.id_orcamento, e.target.value)}
-                              disabled={!ehAdmin}
-                              className={`text-[10px] ml-1 font-bold rounded-full px-2 py-0.5 border ${ehAdmin ? 'cursor-pointer' : 'cursor-default'} focus:outline-none bg-transparent ${orc.status === 'Aprovado' ? 'text-[#5DD62C] border-[#5DD62C]/30' : orc.status === 'Reprovado' ? 'text-red-400 border-red-400/30' : 'text-amber-400 border-amber-400/30'}`}
+                              className={`text-[10px] ml-1 font-bold rounded-full px-2 py-0.5 border cursor-pointer focus:outline-none bg-transparent ${orc.status === 'Aprovado' ? 'text-[#5DD62C] border-[#5DD62C]/30' : orc.status === 'Reprovado' ? 'text-red-400 border-red-400/30' : 'text-amber-400 border-amber-400/30'}`}
                             >
                               <option className="bg-[#1a1a1a] text-amber-400" value="Em Aberto">Em Aberto</option>
                               <option className="bg-[#1a1a1a] text-[#5DD62C]" value="Aprovado">Aprovado</option>
@@ -1583,13 +1588,11 @@ function App({ usuario, onSair }) {
                           <span className={`font-medium ${t.textPrimary} truncate block`} title={orc.comprador}>{orc.comprador || 'Não Informado'}</span>
                           <span className="font-mono mt-0.5 block">{orc.telefone || 'Sem telefone'}</span>
                         </div>
-                        {ehAdmin && (
-                          <div>
-                            <span className="block text-[10px] uppercase mb-0.5">Valor Total</span>
-                            <span className={`font-mono font-bold ${t.textPrimary} text-sm`}>R$ {(orc.total_geral || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</span>
-                            <span className="font-mono mt-0.5 block">{formatarKg(orc.total_peso)} kg</span>
-                          </div>
-                        )}
+                        <div>
+                          <span className="block text-[10px] uppercase mb-0.5">Valor Total</span>
+                          <span className={`font-mono font-bold ${t.textPrimary} text-sm`}>R$ {(orc.total_geral || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</span>
+                          {ehAdmin && <span className="font-mono mt-0.5 block">{formatarKg(orc.total_peso)} kg</span>}
+                        </div>
                       </div>
 
                       <div className={`flex gap-3 text-[10px] uppercase font-bold tracking-wider pt-3 border-t ${t.border} ${t.textSecondary}`}>
@@ -1625,10 +1628,10 @@ function App({ usuario, onSair }) {
                         </div>
                       ) : (
                         <div
-                          onClick={ehAdmin ? () => { setTextoNotaTemp(orc.anotacao || ""); setEditandoNotaOrcamento(orc.id_orcamento); } : undefined}
-                          className={`w-full ${t.inner} border ${t.border} border-dashed rounded-lg p-3 text-xs ${orc.anotacao ? t.textPrimary : `${t.textSecondary} italic`} ${ehAdmin ? 'cursor-pointer hover:border-[#5DD62C]/50' : ''} transition-colors min-h-[60px] whitespace-pre-wrap`}
+                          onClick={() => { setTextoNotaTemp(orc.anotacao || ""); setEditandoNotaOrcamento(orc.id_orcamento); }}
+                          className={`w-full ${t.inner} border ${t.border} border-dashed rounded-lg p-3 text-xs ${orc.anotacao ? t.textPrimary : `${t.textSecondary} italic`} cursor-pointer hover:border-[#5DD62C]/50 transition-colors min-h-[60px] whitespace-pre-wrap`}
                         >
-                          {orc.anotacao || (ehAdmin ? "Clique para adicionar uma anotação sobre esta negociação..." : "Sem anotações.")}
+                          {orc.anotacao || "Clique para adicionar uma anotação sobre esta negociação..."}
                         </div>
                       )}
                     </div>
@@ -1651,7 +1654,7 @@ function App({ usuario, onSair }) {
                               </div>
                               <div className={`flex justify-between text-[10px] ${t.textSecondary} font-mono mt-1.5`}>
                                 <span>Qtd: {item.quantidade} cx</span>
-                                {ehAdmin && <span>R$ {item.vl_unit.toLocaleString('pt-BR', { minimumFractionDigits: 4 })} /un</span>}
+                                <span>R$ {item.vl_unit.toLocaleString('pt-BR', { minimumFractionDigits: 4 })} /un</span>
                               </div>
                               <div className={`flex justify-between text-[10px] ${t.textSecondary} font-mono mt-0.5`}>
                                 <span>{item.onda} / {item.qualidade}</span>
@@ -1826,7 +1829,7 @@ function App({ usuario, onSair }) {
                                 </div>
                                 <div className="w-[45%] md:w-auto flex flex-col gap-2 items-end">
                                   {isFaturadoGeral ? <span className={`text-[11px] font-bold ${t.textSecondary}`}>ENTREGUE</span> : renderizarTagPrazo(pedido.dias_restantes, pedido.data_entrega)}
-                                  {ehAdmin && !isFaturadoGeral && (
+                                  {!isFaturadoGeral && (
                                     <button onClick={(e) => { e.stopPropagation(); alterarStatusPedido(pedido.id, 'Faturada'); }} className={`text-[9px] uppercase tracking-wider font-bold bg-[#5DD62C] hover:bg-[#337418] text-[#0F0F0F] hover:text-[#F8F8F8] px-2 py-1 rounded shadow-sm transition-all`}>
                                       Forçar Baixa
                                     </button>
@@ -1873,7 +1876,7 @@ function App({ usuario, onSair }) {
                                               {ehAdmin && <td className={`py-3 px-3 text-right font-mono ${t.textSecondary}`}>R$ {(item.preco_unitario || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>}
                                               {ehAdmin && <td className={`py-3 px-3 text-right font-mono font-bold ${t.textPrimary}`}>R$ {((qtdExibir || 0) * (item.preco_unitario || 0)).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>}
                                               <td className="py-3 px-3 text-center">
-                                                <select value={item.statusOF || 'Pendente'} onChange={(e) => alternarStatusOf(pedido.id, item.id_numof, e.target.value)} disabled={!ehAdmin} className={`text-[10px] font-bold rounded-full px-2.5 py-1.5 border cursor-pointer focus:outline-none ${obterEstiloStatusCompleto(item.statusOF)}`}>
+                                                <select value={item.statusOF || 'Pendente'} onChange={(e) => alternarStatusOf(pedido.id, item.id_numof, e.target.value)} className={`text-[10px] font-bold rounded-full px-2.5 py-1.5 border cursor-pointer focus:outline-none ${obterEstiloStatusCompleto(item.statusOF)}`}>
                                                   <option value="Pendente" className={`${t.card} text-amber-500`}>Pendente</option>
                                                   <option value="Compras" className={`${t.card} text-sky-500`}>{item.id_compra && item.statusOF === 'Compras' ? `Compras (OC: ${item.id_compra})` : 'Compras'}</option>
                                                   <option value="Produção" className={`${t.card} text-purple-500`}>Produção</option>
@@ -1913,7 +1916,7 @@ function App({ usuario, onSair }) {
                                 </div>
                                 <div className="flex-shrink-0 flex flex-col items-end gap-2">
                                   {isFaturadoGeral ? <span className={`text-[11px] font-bold ${t.textSecondary}`}>ENTREGUE</span> : renderizarTagPrazo(pedido.dias_restantes, pedido.data_entrega)}
-                                  {ehAdmin && !isFaturadoGeral && (
+                                  {!isFaturadoGeral && (
                                     <button onClick={(e) => { e.stopPropagation(); alterarStatusPedido(pedido.id, 'Faturada'); }} className={`text-[9px] uppercase tracking-wider font-bold bg-[#5DD62C] hover:bg-[#337418] text-[#0F0F0F] hover:text-[#F8F8F8] px-2 py-1 rounded shadow-sm transition-all`}>
                                       Forçar Baixa
                                     </button>
@@ -1953,7 +1956,7 @@ function App({ usuario, onSair }) {
                                             <span>Qtd Restante: <span className={t.textPrimary}>{Number(qtdExibir).toLocaleString('pt-BR')} / {Number(item.qtd_prog).toLocaleString('pt-BR')}</span></span>
                                             {ehAdmin && <span className={`${t.textAccent} font-mono font-bold`}>{formatarKg(pesoExibir)} kg</span>}
                                           </div>
-                                          <select value={item.statusOF || 'Pendente'} onChange={(e) => alternarStatusOf(pedido.id, item.id_numof, e.target.value)} disabled={!ehAdmin} className={`w-full py-2 md:py-1.5 mt-1 rounded-md text-[11px] md:text-[10px] font-bold border transition-all cursor-pointer focus:outline-none ${obterEstiloStatusCompleto(item.statusOF)}`}>
+                                          <select value={item.statusOF || 'Pendente'} onChange={(e) => alternarStatusOf(pedido.id, item.id_numof, e.target.value)} className={`w-full py-2 md:py-1.5 mt-1 rounded-md text-[11px] md:text-[10px] font-bold border transition-all cursor-pointer focus:outline-none ${obterEstiloStatusCompleto(item.statusOF)}`}>
                                             <option value="Pendente" className={`${t.card} text-amber-500`}>Pendente</option>
                                             <option value="Compras" className={`${t.card} text-sky-500`}>{item.id_compra && item.statusOF === 'Compras' ? `Compras (OC: ${item.id_compra})` : 'Compras'}</option>
                                             <option value="Produção" className={`${t.card} text-purple-500`}>Produção</option>
@@ -2534,9 +2537,9 @@ function App({ usuario, onSair }) {
                                   <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" /></svg>
                                 </a>
                               )}
-                              {ehAdmin && <button onClick={() => ocultarClienteComercial(c.id_cliente)} title="Ocultar Cliente (Ignorar)" className="inline-block p-1.5 bg-gray-500/10 text-gray-500 rounded hover:bg-gray-500 hover:text-white transition-colors">
+                              <button onClick={() => ocultarClienteComercial(c.id_cliente)} title="Ocultar Cliente (Ignorar)" className="inline-block p-1.5 bg-gray-500/10 text-gray-500 rounded hover:bg-gray-500 hover:text-white transition-colors">
                                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l3.59 3.59m0 0A9.953 9.953 0 0112 5c4.478 0 8.268 2.943 9.543 7a10.025 10.025 0 01-4.132 5.411m0 0L21 21" /></svg>
-                              </button>}
+                              </button>
                             </td>
                           </tr>
                         );
