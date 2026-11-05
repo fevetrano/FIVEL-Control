@@ -3,9 +3,43 @@ import axios from 'axios'
 import { APIProvider, Map, AdvancedMarker, InfoWindow, Pin, useMap as useGoogleMap } from '@vis.gl/react-google-maps'
 
 const COORDENADAS_EMPRESA = [-23.70938551545255, -46.59345608749334]
-const API_URL = (window.location.port === '5000')
+// VITE_API_URL permite apontar uma cópia de testes para outro backend (ex.: http://localhost:5001).
+const API_URL = import.meta.env.VITE_API_URL || ((window.location.port === '5000')
   ? window.location.origin
-  : `http://${window.location.hostname || 'localhost'}:5000`;
+  : `http://${window.location.hostname || 'localhost'}:5000`);
+
+// Sem limite, uma requisição travada deixaria a gravação "pendente" para sempre.
+axios.defaults.timeout = 90000;
+
+// Controle das gravações: enquanto houver alguma pendente o polling não sobrescreve a tela,
+// e respostas de consultas iniciadas antes da última gravação são descartadas.
+const controleEscrita = { pendentes: 0, versao: 0, ultima: 0, fila: Promise.resolve() };
+
+function iniciarAtualizacao() {
+  controleEscrita.pendentes += 1;
+  controleEscrita.versao += 1;
+  controleEscrita.ultima = Date.now();
+}
+
+function finalizarAtualizacao() {
+  controleEscrita.pendentes = Math.max(0, controleEscrita.pendentes - 1);
+}
+
+// Trava de segurança: uma gravação esquecida não congela a tela por mais de 1 minuto.
+function atualizacaoEmAndamento() {
+  return controleEscrita.pendentes > 0 && Date.now() - controleEscrita.ultima < 60000;
+}
+
+function respostaDesatualizada(versaoNoInicio) {
+  return atualizacaoEmAndamento() || versaoNoInicio !== controleEscrita.versao;
+}
+
+// Gravações de status vão ao servidor uma de cada vez, na ordem em que foram feitas.
+function enfileirarEscrita(requisicao) {
+  const resultado = controleEscrita.fila.then(requisicao);
+  controleEscrita.fila = resultado.catch(() => {});
+  return resultado;
+}
 
 function MapPolyline({ positions, color, weight }) {
   const map = useGoogleMap();
@@ -95,7 +129,6 @@ function App() {
   const [editandoNotaOrcamento, setEditandoNotaOrcamento] = useState(null)
 
   const [calendarioPesosData, setCalendarioPesosData] = useState({ mes: new Date().getMonth() + 1, ano: new Date().getFullYear(), carregando: false, dados: null });
-  const [modoPesoCalendario, setModoPesoCalendario] = useState('total');
 
   const [dadosRecorrencia, setDadosRecorrencia] = useState([]);
   const [resumoRecorrencia, setResumoRecorrencia] = useState({ "Em Dia": 0, "Atenção": 0, "Atrasado": 0, "Total": 0 });
@@ -153,19 +186,6 @@ function App() {
   const [textoNotaTemp, setTextoNotaTemp] = useState("")
 
   const abortControllerOSRM = useRef(null)
-  const isUpdatingRef = useRef(false);
-  const fallbackTimerRef = useRef(null);
-
-  const iniciarAtualizacao = () => {
-    isUpdatingRef.current = true;
-    if (fallbackTimerRef.current) clearTimeout(fallbackTimerRef.current);
-    fallbackTimerRef.current = setTimeout(() => { isUpdatingRef.current = false; }, 8000);
-  };
-
-  const finalizarAtualizacao = () => {
-    isUpdatingRef.current = false;
-    if (fallbackTimerRef.current) clearTimeout(fallbackTimerRef.current);
-  };
 
   const t = {
     bg: isDarkMode ? 'bg-[#0F0F0F]' : 'bg-gray-100',
@@ -191,14 +211,15 @@ function App() {
   }
 
   const carregarPedidos = useCallback((silencioso = false) => {
-    if (silencioso && isUpdatingRef.current) return;
+    if (silencioso && atualizacaoEmAndamento()) return;
     if (!silencioso) setCarregando(true)
+    const versao = controleEscrita.versao;
 
     axios.get(`${API_URL}/api/pedidos?ordenar_por=${ordenarPor}&ordem=${ordem}`)
       .then(response => {
-        if (isUpdatingRef.current) return;
-        setPedidos(Array.isArray(response.data) ? response.data : [])
         if (!silencioso) setCarregando(false)
+        if (respostaDesatualizada(versao)) return;
+        setPedidos(Array.isArray(response.data) ? response.data : [])
       })
       .catch(error => {
         console.error("Erro API Pedidos:", error);
@@ -207,23 +228,26 @@ function App() {
   }, [ordenarPor, ordem])
 
   const carregarCompras = useCallback((silencioso = false) => {
-    if (silencioso && isUpdatingRef.current) return;
+    if (silencioso && atualizacaoEmAndamento()) return;
+    const versao = controleEscrita.versao;
     axios.get(`${API_URL}/api/compras`).then(res => {
-      if (!isUpdatingRef.current) setCompras(Array.isArray(res.data) ? res.data : [])
-    })
+      if (!respostaDesatualizada(versao)) setCompras(Array.isArray(res.data) ? res.data : [])
+    }).catch(err => console.error("Erro API Compras", err));
   }, [])
 
   const carregarOrcamentos = useCallback((silencioso = false) => {
-    if (silencioso && isUpdatingRef.current) return;
+    if (silencioso && atualizacaoEmAndamento()) return;
+    const versao = controleEscrita.versao;
     axios.get(`${API_URL}/api/orcamentos`).then(res => {
-      if (!isUpdatingRef.current) setOrcamentos(Array.isArray(res.data) ? res.data : [])
-    })
+      if (!respostaDesatualizada(versao)) setOrcamentos(Array.isArray(res.data) ? res.data : [])
+    }).catch(err => console.error("Erro API Orcamentos", err));
   }, [])
 
   const carregarEstoque = useCallback((silencioso = false) => {
-    if (silencioso && isUpdatingRef.current) return;
+    if (silencioso && atualizacaoEmAndamento()) return;
+    const versao = controleEscrita.versao;
     axios.get(`${API_URL}/api/estoque`).then(res => {
-      if (!isUpdatingRef.current) setEstoque(Array.isArray(res.data) ? res.data : [])
+      if (!respostaDesatualizada(versao)) setEstoque(Array.isArray(res.data) ? res.data : [])
     }).catch(err => console.error("Erro API Estoque", err));
   }, [])
 
@@ -436,27 +460,29 @@ function App() {
 
     iniciarAtualizacao();
     try {
+      // As coordenadas ficam em coordenadasPedidos (e não nos pedidos), para o polling não apagá-las.
       const pedidosComCoords = [];
+      const novasCoords = {};
       for (const p of pedidosParaRota) {
-        if (!p.latitude || !p.longitude) {
+        let coords = coordenadasPedidos[p.id];
+        if (!coords) {
           try {
             const res = await axios.get(`${API_URL}/api/geocode`, {
               params: { id_cliente: p.id_cliente, endereco: p.endereco_completo },
               signal
             });
-            if (res.data.lat && res.data.lng) {
-              p.latitude = res.data.lat;
-              p.longitude = res.data.lng;
-              setPedidos(prev => prev.map(old => old.id === p.id ? { ...old, latitude: p.latitude, longitude: p.longitude } : old));
-            }
+            if (res.data.lat && res.data.lng) coords = { lat: res.data.lat, lng: res.data.lng };
           } catch (err) {
+            if (axios.isCancel(err)) throw err;
             console.error("Geocode falhou para pedido", p.id, err);
           }
         }
-        if (p.latitude && p.longitude) {
-          pedidosComCoords.push(p);
+        if (coords) {
+          novasCoords[p.id] = coords;
+          pedidosComCoords.push({ id: p.id, lat: coords.lat, lng: coords.lng });
         }
       }
+      setCoordenadasPedidos(prev => ({ ...prev, ...novasCoords }));
 
       if (pedidosComCoords.length === 0) {
         finalizarAtualizacao();
@@ -464,19 +490,7 @@ function App() {
         return;
       }
 
-      const payload = {
-        pedidos: pedidosComCoords.map(p => ({
-          id: p.id,
-          lat: p.latitude,
-          lng: p.longitude
-        }))
-      };
-
-      const novasCoords = {};
-      pedidosComCoords.forEach(p => {
-        novasCoords[p.id] = { lat: p.latitude, lng: p.longitude };
-      });
-      setCoordenadasPedidos(prev => ({ ...prev, ...novasCoords }));
+      const payload = { pedidos: pedidosComCoords };
 
       const res = await axios.post(`${API_URL}/api/optimize_route`, payload, { signal });
       if (res.data.coordenadas) {
@@ -521,15 +535,18 @@ function App() {
     setCompras(prev => prev.map(c => c.idCompra === idCompra ? { ...c, status: 'RECEBIDA', dataRecebida: new Date().toLocaleDateString('pt-BR') } : c));
 
     axios.put(`${API_URL}/api/compras/${idCompra}/baixa`)
-      .then(() => {
+      .then((res) => {
         finalizarAtualizacao();
         carregarCompras(true);
         carregarPedidos(true);
         carregarResumos();
+        const avisos = res.data?.avisos || [];
+        if (avisos.length > 0) alert(`Baixa da OC ${idCompra} registrada.\n\nAtenção:\n${avisos.join('\n')}`);
       })
-      .catch(() => {
+      .catch((err) => {
         finalizarAtualizacao();
         carregarCompras(true);
+        alert(err.response?.data?.erro || `Erro ao dar baixa na OC ${idCompra}.`);
       });
   }
 
@@ -573,7 +590,7 @@ function App() {
     setPedidos(prevPedidos => {
       return prevPedidos.map(p => {
         if (p.id === idPedido) {
-          const novosItens = p.itens.map(item => item.id_numof === idOf ? { ...item, statusOF: novoStatus, qtd_produzida: qtdProduzida || item.qtd_produzida, concluido: (novoStatus === "Pronto" || novoStatus === "Faturada") } : item);
+          const novosItens = p.itens.map(item => item.id_numof === idOf ? { ...item, statusOF: novoStatus, qtd_produzida: qtdProduzida ?? item.qtd_produzida, concluido: (novoStatus === "Pronto" || novoStatus === "Faturada") } : item);
           const abertos = novosItens.filter(i => i.statusOF !== "Faturada");
           const todasConcluidas = abertos.length > 0 && abertos.every(i => i.statusOF === "Pronto");
           const pedidoParcialmenteAtualizado = { ...p, itens: novosItens, status: todasConcluidas ? 'Pronto' : 'Pendente' };
@@ -583,7 +600,7 @@ function App() {
       })
     })
 
-    axios.put(`${API_URL}/api/pedidos/${idPedido}/itens/${idOf}/status`, { status: novoStatus, qtd_produzida: qtdProduzida })
+    enfileirarEscrita(() => axios.put(`${API_URL}/api/pedidos/${idPedido}/itens/${idOf}/status`, { status: novoStatus, qtd_produzida: qtdProduzida }))
       .then(() => {
         finalizarAtualizacao();
         carregarResumos()
@@ -605,7 +622,7 @@ function App() {
 
       iniciarAtualizacao();
       const numeroOF = ofBipador.trim();
-      const qtdNum = qtdProduzidaBipador.trim() ? parseFloat(qtdProduzidaBipador.trim()) : null;
+      const qtdNum = qtdProduzidaBipador.trim() ? parseFloat(qtdProduzidaBipador.trim().replace(',', '.')) : null;
       setOfBipador("");
       setQtdProduzidaBipador("");
 
@@ -615,7 +632,7 @@ function App() {
           const novosItens = p.itens.map(item => {
             if (String(item.id_numof) === numeroOF) {
               encontrouOF = true;
-              return { ...item, statusOF: statusBipador, qtd_produzida: qtdNum || item.qtd_produzida, concluido: (statusBipador === "Pronto" || statusBipador === "Faturada") }
+              return { ...item, statusOF: statusBipador, qtd_produzida: qtdNum ?? item.qtd_produzida, concluido: (statusBipador === "Pronto" || statusBipador === "Faturada") }
             }
             return item;
           });
@@ -631,13 +648,13 @@ function App() {
       });
 
       try {
-        await axios.put(`${API_URL}/api/ofs/status-rapido`, { id_of: numeroOF, status: statusBipador, qtd_produzida: qtdNum });
+        await enfileirarEscrita(() => axios.put(`${API_URL}/api/ofs/status-rapido`, { id_of: numeroOF, status: statusBipador, qtd_produzida: qtdNum }));
         finalizarAtualizacao();
         setMsgBipador({ texto: `OF ${numeroOF} salva!`, tipo: 'success' });
         carregarResumos();
       } catch (error) {
         finalizarAtualizacao();
-        setMsgBipador({ texto: `Erro na OF ${numeroOF}`, tipo: 'error' });
+        setMsgBipador({ texto: error.response?.data?.erro || `Erro na OF ${numeroOF}`, tipo: 'error' });
         carregarPedidos(true);
       }
 
@@ -653,7 +670,7 @@ function App() {
     iniciarAtualizacao();
     setPedidos(prevPedidos => prevPedidos.map(p => p.id === id ? { ...p, status: novoStatus } : p));
 
-    axios.put(`${API_URL}/api/pedidos/${id}/status`, { status: novoStatus })
+    enfileirarEscrita(() => axios.put(`${API_URL}/api/pedidos/${id}/status`, { status: novoStatus }))
       .then(() => {
         finalizarAtualizacao();
         carregarResumos()
@@ -665,9 +682,7 @@ function App() {
   }
 
   const alterarAba = (novaAba) => {
-    iniciarAtualizacao();
     setAbaAtiva(novaAba);
-    finalizarAtualizacao();
   };
 
   const obterContadorOfs = (pedido) => {
@@ -1168,7 +1183,7 @@ function App() {
                     <button
                       onClick={() => {
                         iniciarAtualizacao();
-                        axios.put(`${API_URL}/api/pedidos/status-lote`, { ids: pedidosSelecionados, status: 'Faturada' })
+                        enfileirarEscrita(() => axios.put(`${API_URL}/api/pedidos/status-lote`, { ids: pedidosSelecionados, status: 'Faturada' }))
                           .then(() => { finalizarAtualizacao(); setPedidosSelecionados([]); carregarPedidos(true); carregarResumos(); })
                           .catch(() => { finalizarAtualizacao(); })
                       }}
@@ -1268,7 +1283,8 @@ function App() {
                       </AdvancedMarker>
 
                       {pedidosProntosParaMapa.map((pedido) => {
-                        if (!pedido.latitude) return null;
+                        const coords = coordenadasPedidos[pedido.id];
+                        if (!coords) return null;
 
                         const isRoteirizado = ordemEntregas.includes(pedido.id);
                         const ordemCarregamento = isRoteirizado ? ordemEntregas.indexOf(pedido.id) + 1 : 0;
@@ -1277,12 +1293,12 @@ function App() {
                         return (
                           <AdvancedMarker
                             key={pedido.id}
-                            position={{ lat: pedido.latitude, lng: pedido.longitude }}
+                            position={coords}
                             onClick={() => setMapaInfoWindowAberto(pedido.id)}
                           >
                             <Pin background={isRoteirizado ? '#F59E0B' : '#EA4335'} borderColor={isRoteirizado ? '#B45309' : '#C5221F'} glyphColor={'#ffffff'} glyph={isRoteirizado ? String(ordemEntrega) : 'P'} />
                             {mapaInfoWindowAberto === pedido.id && (
-                              <InfoWindow position={{ lat: pedido.latitude, lng: pedido.longitude }} onCloseClick={() => setMapaInfoWindowAberto(null)}>
+                              <InfoWindow position={coords} onCloseClick={() => setMapaInfoWindowAberto(null)}>
                                 <div className="text-gray-900 p-1">
                                   <strong className="text-base">{pedido.cliente}</strong>
                                   <hr className="my-1 border-gray-200" />
@@ -2117,8 +2133,16 @@ function App() {
 
           const totalSaida = dados ? dados.saida_mes_anterior_kg : 0;
           const totalEntradaMes = dados ? dados.entrada_mes_kg : 0;
-          const totalBacklog = dados ? dados.backlog_anterior_kg : 0;
-          const totalExibido = modoPesoCalendario === 'total' ? (totalEntradaMes + totalBacklog) : totalEntradaMes;
+          const pesoEntrada = dados ? dados.peso_entrada_kg : null;
+          const totalMes = dados ? dados.total_mes_kg : null;
+          const nomeMesAnterior = mesesNomes[calendarioPesosData.mes === 1 ? 11 : calendarioPesosData.mes - 2];
+
+          const formatarRegistro = (texto) => {
+            if (!texto) return '';
+            const [data, hora] = texto.split(' ');
+            const [ano, mes, dia] = data.split('-');
+            return `${dia}/${mes}/${ano}${hora ? ` ${hora.slice(0, 5)}` : ''}`;
+          };
 
           const mudarMes = (delta) => {
             setCalendarioPesosData(prev => {
@@ -2182,36 +2206,42 @@ function App() {
                   <div className={`${t.card} p-5 md:p-6 rounded-2xl shadow-md flex flex-col justify-center border ${t.border}`}>
                     <div className="flex items-center gap-2 mb-2">
                       <svg className={`w-5 h-5 ${t.textSecondary}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 11l3-3m0 0l3 3m-3-3v8m0-13a9 9 0 110 18 9 9 0 010-18z" /></svg>
-                      <p className={`text-[12px] sm:text-[13px] font-medium ${t.textSecondary} uppercase tracking-wider`}>Saída ({mesesNomes[calendarioPesosData.mes === 1 ? 11 : calendarioPesosData.mes - 2]})</p>
+                      <p className={`text-[12px] sm:text-[13px] font-medium ${t.textSecondary} uppercase tracking-wider`}>Saída ({nomeMesAnterior})</p>
                     </div>
                     <p className={`text-2xl md:text-3xl font-bold ${t.textPrimary}`}>{formatarKg(totalSaida)} <span className="text-sm font-normal text-gray-500">kg</span></p>
-                    <p className={`text-[10px] mt-2 ${t.textSecondary}`}>Total de NFs + Recibos do mês anterior</p>
+                    <p className={`text-[10px] mt-2 ${t.textSecondary}`}>
+                      Peso total faturado (NFs + Recibos) em {nomeMesAnterior}{dados && !dados.saida_registrada ? ' · calculado do ERP' : ''}
+                    </p>
+                  </div>
+
+                  <div className={`${t.card} p-5 md:p-6 rounded-2xl shadow-md flex flex-col justify-center border ${t.border}`}>
+                    <div className="flex items-center gap-2 mb-2">
+                      <svg className={`w-5 h-5 ${t.textSecondary}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 14l-7 7m0 0l-7-7m7 7V3" /></svg>
+                      <p className={`text-[12px] sm:text-[13px] font-medium ${t.textSecondary} uppercase tracking-wider`}>Peso de Entrada</p>
+                    </div>
+                    {pesoEntrada !== null && pesoEntrada !== undefined ? (
+                      <p className={`text-2xl md:text-3xl font-bold ${t.textPrimary}`}>{formatarKg(pesoEntrada)} <span className="text-sm font-normal text-gray-500">kg</span></p>
+                    ) : (
+                      <p className={`text-lg font-bold ${t.textSecondary}`}>Sem registro</p>
+                    )}
+                    <p className={`text-[10px] mt-2 ${t.textSecondary}`}>
+                      Peso em aberto no dia 01{dados?.peso_entrada_registrado_em ? ` · registrado em ${formatarRegistro(dados.peso_entrada_registrado_em)}` : ''}
+                    </p>
                   </div>
 
                   <div className={`${t.card} p-5 md:p-6 rounded-2xl shadow-md flex flex-col justify-center border ${t.borderAccentSoft} relative overflow-hidden`}>
                     <div className={`absolute top-0 right-0 w-16 h-16 ${t.bgAccentSoft} rounded-bl-full -z-10 opacity-50`}></div>
-
-                    <div className="flex justify-between items-start mb-4">
-                      <div className="flex items-center gap-2">
-                        <svg className={`w-5 h-5 ${t.textAccent}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 14l-7 7m0 0l-7-7m7 7V3" /></svg>
-                        <p className={`text-[12px] sm:text-[13px] font-medium ${t.textAccent} uppercase tracking-wider`}>Peso em Aberto</p>
-                      </div>
+                    <div className="flex items-center gap-2 mb-2">
+                      <svg className={`w-5 h-5 ${t.textAccent}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6" /></svg>
+                      <p className={`text-[12px] sm:text-[13px] font-medium ${t.textAccent} uppercase tracking-wider`}>Total do Mês</p>
                     </div>
-
-                    <p className={`text-3xl md:text-4xl font-bold ${t.textPrimary} mb-4`}>{formatarKg(totalExibido)} <span className="text-sm font-normal text-gray-500">kg</span></p>
-
-                    <div className={`flex bg-[#151515] rounded-lg border ${t.border} p-1 w-full mt-auto`}>
-                      <button
-                        onClick={() => setModoPesoCalendario('mes')}
-                        className={`flex-1 py-1.5 text-[11px] font-bold rounded-md transition-all ${modoPesoCalendario === 'mes' ? 'bg-[#337418] text-white shadow-sm' : 'text-gray-500 hover:text-gray-300'}`}
-                      >Apenas Mês</button>
-                      <button
-                        onClick={() => setModoPesoCalendario('total')}
-                        className={`flex-1 py-1.5 text-[11px] font-bold rounded-md transition-all ${modoPesoCalendario === 'total' ? 'bg-[#337418] text-white shadow-sm' : 'text-gray-500 hover:text-gray-300'}`}
-                      >Mês + Backlog</button>
-                    </div>
-                    <p className={`text-[10px] mt-3 ${t.textSecondary} text-center`}>
-                      {modoPesoCalendario === 'mes' ? 'Peso apenas de pedidos emitidos no mês.' : 'Passivo real total da fábrica.'}
+                    {totalMes !== null && totalMes !== undefined ? (
+                      <p className={`text-3xl md:text-4xl font-bold ${t.textPrimary}`}>{formatarKg(totalMes)} <span className="text-sm font-normal text-gray-500">kg</span></p>
+                    ) : (
+                      <p className={`text-lg font-bold ${t.textSecondary}`}>Sem registro</p>
+                    )}
+                    <p className={`text-[10px] mt-2 ${t.textSecondary}`}>
+                      Peso de entrada + {formatarKg(totalEntradaMes)} kg de pedidos emitidos no mês
                     </p>
                   </div>
                 </div>

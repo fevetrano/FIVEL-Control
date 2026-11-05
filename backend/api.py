@@ -1,4 +1,5 @@
 import os
+import re
 import json
 import sqlite3
 import traceback
@@ -34,6 +35,36 @@ dist_dev = os.path.abspath(os.path.join(BASE_DIR, "..", "frontend", "dist"))
 FRONTEND_DIST = dist_local if os.path.exists(dist_local) else dist_dev
 app = Flask(__name__, static_folder=FRONTEND_DIST, static_url_path="")
 CORS(app)
+
+
+# --- PARÂMETROS DE NEGÓCIO ---
+# Pontos de corte: a partir deles os números do ERP são confiáveis.
+DATA_CORTE_PEDIDOS = "2026-07-01"
+DATA_CORTE_ORCAMENTOS = "2026-01-01"
+OC_INICIAL_COMPRAS = 1863
+# Pedidos ignorados nas listas (15931: entregas programadas por meses, anterior ao corte).
+PEDIDOS_EXCLUIDOS = (15931,)
+
+# Norma do papelão ondulado: variação de 10% na quantidade. Faturou 90% = OF encerrada.
+TOLERANCIA_FATURAMENTO = 0.90
+STATUS_OF_VALIDOS = ("Pendente", "Compras", "Produção", "Parcial", "Pronto", "Faturada")
+
+COORDENADAS_FABRICA = (-23.70938551545255, -46.59345608749334)
+
+# Timeout (conexão, resposta) em segundos para APIs externas.
+TIMEOUT_GEOCODE = (5, 10)
+TIMEOUT_ROTAS = (5, 30)
+
+# Histórico mensal: primeiro mês com fechamento automático e os valores
+# do fechamento de outubro/2026 informados manualmente.
+HISTORICO_INICIO = (2026, 11)
+FECHAMENTOS_INICIAIS = {
+    (2026, 10): {"saida_kg": 32407.89},
+    (2026, 11): {"aberto_inicio_kg": 9957.09},
+}
+INTERVALO_FECHAMENTO_SEG = 600
+
+SQL_PEDIDOS_EXCLUIDOS = ", ".join(str(int(p)) for p in PEDIDOS_EXCLUIDOS)
 
 
 # --- SISTEMA DE BANCO DE DADOS SQLITE LOCAL ---
@@ -120,6 +151,70 @@ def init_sqlite_db():
                 data_ignorado TEXT
             )
         """)
+        # Um registro por mês: peso em aberto no dia 01 e peso total faturado no mês.
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS fechamento_mensal (
+                ano INTEGER NOT NULL,
+                mes INTEGER NOT NULL,
+                aberto_inicio_kg REAL,
+                aberto_registrado_em TEXT,
+                aberto_origem TEXT,
+                saida_kg REAL,
+                saida_registrado_em TEXT,
+                saida_origem TEXT,
+                PRIMARY KEY (ano, mes)
+            )
+        """)
+        conn.commit()
+        conn.close()
+
+    for (ano, mes), valores in FECHAMENTOS_INICIAIS.items():
+        if "aberto_inicio_kg" in valores:
+            registrar_fechamento(ano, mes, "aberto", valores["aberto_inicio_kg"], "manual")
+        if "saida_kg" in valores:
+            registrar_fechamento(ano, mes, "saida", valores["saida_kg"], "manual")
+
+
+# --- FECHAMENTO MENSAL (SQLite) ---
+
+
+def ler_fechamento(ano, mes):
+    with db_lock:
+        conn = get_sqlite_conn()
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT aberto_inicio_kg, aberto_registrado_em, aberto_origem, saida_kg, saida_registrado_em, saida_origem "
+            "FROM fechamento_mensal WHERE ano = ? AND mes = ?",
+            (ano, mes),
+        )
+        row = cur.fetchone()
+        conn.close()
+    if not row:
+        return None
+    return {
+        "aberto_inicio_kg": row[0],
+        "aberto_registrado_em": row[1],
+        "aberto_origem": row[2],
+        "saida_kg": row[3],
+        "saida_registrado_em": row[4],
+        "saida_origem": row[5],
+    }
+
+
+def registrar_fechamento(ano, mes, campo, valor, origem):
+    """Grava 'aberto' (peso em aberto no dia 01) ou 'saida' (peso faturado no mês).
+    Um valor já registrado nunca é sobrescrito."""
+    coluna = {"aberto": "aberto_inicio_kg", "saida": "saida_kg"}[campo]
+    agora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    with db_lock:
+        conn = get_sqlite_conn()
+        cur = conn.cursor()
+        cur.execute("INSERT OR IGNORE INTO fechamento_mensal (ano, mes) VALUES (?, ?)", (ano, mes))
+        cur.execute(
+            f"UPDATE fechamento_mensal SET {coluna} = ?, {campo}_registrado_em = ?, {campo}_origem = ? "
+            f"WHERE ano = ? AND mes = ? AND {coluna} IS NULL",
+            (valor, agora, origem, ano, mes),
+        )
         conn.commit()
         conn.close()
 
@@ -151,27 +246,32 @@ def carregar_kanban_local():
         return resultado
 
 
+def _gravar_status(cur, categoria, chave, valor, qtd_produzida, agora):
+    # Quantidade e data de produção já gravadas são mantidas quando não informadas,
+    # para a troca de status não apagar o apontamento anterior.
+    cur.execute(
+        "SELECT data_producao, qtd_produzida FROM kanban_status WHERE categoria=? AND chave=?",
+        (categoria, str(chave)),
+    )
+    row = cur.fetchone()
+    data_prod = row[0] if row and row[0] else None
+    if data_prod is None and valor == "Produção":
+        data_prod = agora
+    if qtd_produzida is None and row:
+        qtd_produzida = row[1]
+
+    cur.execute(
+        "INSERT OR REPLACE INTO kanban_status (categoria, chave, status, data_producao, qtd_produzida) VALUES (?, ?, ?, ?, ?)",
+        (categoria, str(chave), str(valor), data_prod, qtd_produzida),
+    )
+
+
 def safe_update_status(categoria, chave, valor, qtd_produzida=None):
     with db_lock:
         conn = get_sqlite_conn()
         cur = conn.cursor()
-
         agora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        data_prod = agora if valor == "Produção" else None
-
-        if valor == "Produção":
-            cur.execute(
-                "SELECT data_producao FROM kanban_status WHERE categoria=? AND chave=?",
-                (categoria, str(chave)),
-            )
-            row = cur.fetchone()
-            if row and row[0]:
-                data_prod = row[0]
-
-        cur.execute(
-            "INSERT OR REPLACE INTO kanban_status (categoria, chave, status, data_producao, qtd_produzida) VALUES (?, ?, ?, ?, ?)",
-            (categoria, str(chave), str(valor), data_prod, qtd_produzida),
-        )
+        _gravar_status(cur, categoria, chave, valor, qtd_produzida, agora)
         conn.commit()
         conn.close()
 
@@ -193,22 +293,8 @@ def safe_update_status_lote(categoria, atualizacoes_dict):
         conn = get_sqlite_conn()
         cur = conn.cursor()
         agora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
         for chave, valor in atualizacoes_dict.items():
-            data_prod = agora if valor == "Produção" else None
-            if valor == "Produção":
-                cur.execute(
-                    "SELECT data_producao FROM kanban_status WHERE categoria=? AND chave=?",
-                    (categoria, str(chave)),
-                )
-                row = cur.fetchone()
-                if row and row[0]:
-                    data_prod = row[0]
-
-            cur.execute(
-                "INSERT OR REPLACE INTO kanban_status (categoria, chave, status, data_producao, qtd_produzida) VALUES (?, ?, ?, ?, COALESCE((SELECT qtd_produzida FROM kanban_status WHERE categoria=? AND chave=?), NULL))",
-                (categoria, str(chave), str(valor), data_prod, categoria, str(chave)),
-            )
+            _gravar_status(cur, categoria, chave, valor, None, agora)
         conn.commit()
         conn.close()
 
@@ -272,10 +358,11 @@ def build_of_db_status_map(cur):
 def obter_status_final_of(
     status_manual, status_banco, is_faturada_total, is_faturada_parcial
 ):
-    if status_manual:
-        return status_manual
+    # Faturado dentro da tolerância encerra a OF mesmo com status manual.
     if is_faturada_total:
         return "Faturada"
+    if status_manual:
+        return status_manual
     if is_faturada_parcial:
         return "Parcial"
     if status_banco:
@@ -316,8 +403,8 @@ def get_pedidos_processados(ordenar_por="id_pedido", ordem="desc"):
         status_pedidos_local = kanban_local.get("pedidos", {})
         status_ofs_local = kanban_local.get("ofs", {})
 
-        # Query de OFs com filtro direto da fábrica
-        query = """
+        # Query de OFs com filtro direto da fábrica (parâmetros vêm de constantes do servidor)
+        query = f"""
             SELECT 
                 p.ID_NUMPED AS ID_PEDIDO, p.PEDIDO_CLIENTE, p.EMISSAO, p.DATA_ENTREGA AS PRAZO_PEDIDO, p.ID_EMPRESA,
                 p.TOTAL_PESO AS PESO_TOTAL_PEDIDO, p.TOTAL_GERAL, c.ID_CLIENTE, c.NOME AS CLIENTE_RAZAO,
@@ -349,14 +436,14 @@ def get_pedidos_processados(ordenar_por="id_pedido", ordem="desc"):
             JOIN PEDITEM i ON p.ID_NUMPED = i.ID_NUMPED
             LEFT JOIN ORDFAB o ON (o.ID_NUMPED = i.ID_NUMPED AND o.ID_PRODUTO = i.ID_PRODUTO)
             LEFT JOIN FT ft ON (i.ID_PRODUTO = ft.ID_PRODUTO AND ft.DESATIVADO <> 'S')
-            WHERE (p.EMISSAO >= '2026-07-01' OR p.DATA_ENTREGA >= '2026-07-01' OR o.DTPROG >= '2026-07-01')
+            WHERE (p.EMISSAO >= '{DATA_CORTE_PEDIDOS}' OR p.DATA_ENTREGA >= '{DATA_CORTE_PEDIDOS}' OR o.DTPROG >= '{DATA_CORTE_PEDIDOS}')
               AND p.ID_EMPRESA IN (1, 2)
               AND (p.CANCELADO IS NULL OR p.CANCELADO <> 'S')
               AND (p.PEDIDO_BLOQUEADO IS NULL OR p.PEDIDO_BLOQUEADO <> 'S')
               AND (p.DESATIVADO IS NULL OR p.DESATIVADO <> 'S')
               AND (o.DESATIVADO IS NULL OR o.DESATIVADO <> 'S')
               AND (o.LIQUIDADO IS NULL OR o.LIQUIDADO <> 'S')
-              AND p.ID_NUMPED <> 15931
+              AND p.ID_NUMPED NOT IN ({SQL_PEDIDOS_EXCLUIDOS})
             ORDER BY p.ID_NUMPED DESC;
         """
 
@@ -412,6 +499,7 @@ def get_pedidos_processados(ordenar_por="id_pedido", ordem="desc"):
                     "raw_entrega": "",
                     "dias_restantes": 999999,
                     "itens": [],
+                    "peso_total_pedido_bruto": float(row.get("peso_total_pedido") or 0.0),
                     "has_faturado_of": False,
                     "has_ativa_of": False,
                 }
@@ -440,7 +528,7 @@ def get_pedidos_processados(ordenar_por="id_pedido", ordem="desc"):
             is_faturada_parcial = False
 
             if qtd_of > 0:
-                if qtd_faturada_of >= (qtd_of * 0.90):
+                if qtd_faturada_of >= (qtd_of * TOLERANCIA_FATURAMENTO):
                     is_faturada_total = True
                 elif qtd_faturada_of > 0:
                     is_faturada_parcial = True
@@ -577,7 +665,6 @@ def get_pedidos_processados(ordenar_por="id_pedido", ordem="desc"):
 
             # Mantém em RAW float para exibir as decimais exatas no Frontend
             pedido["peso_total_kg"] = peso_aberto_pedido
-            pedido["peso_total_pedido_bruto"] = float(row.get("peso_total_pedido") or 0.0)
             pedido["faturamento_total"] = valor_aberto_pedido
             pedido["total_itens_abertos"] = itens_ativos_pedido
 
@@ -640,86 +727,153 @@ def obter_pedidos():
         return jsonify({"erro": str(e)}), 500
 
 
+def mes_anterior(ano, mes):
+    return (ano - 1, 12) if mes == 1 else (ano, mes - 1)
+
+
+def proximo_mes(ano, mes):
+    return (ano + 1, 1) if mes == 12 else (ano, mes + 1)
+
+
+def calcular_saida_mes_kg(cur, ano, mes):
+    """Peso total faturado no mês: NFs + recibos."""
+    cur.execute(
+        """SELECT COALESCE(SUM(OI_BRUTO), 0) FROM FISCAL
+           WHERE EMISS_ANO = ? AND EMISS_MES = ? AND ID_EMPRESA IN (1, 2)
+             AND (CANCELADA IS NULL OR CANCELADA <> 'S')
+             AND (IGNORAR_PESO IS NULL OR IGNORAR_PESO <> 'S')""",
+        (ano, mes),
+    )
+    peso_nfs = float(cur.fetchone()[0] or 0.0)
+
+    cur.execute(
+        """SELECT COALESCE(SUM(pfi.PESOTOTAL), 0)
+           FROM RECEBIMENTOS r
+           JOIN PFITEM pfi ON pfi.ID_PF = r.ID_PF AND pfi.ID_EMPRESA = r.ID_EMPRESA
+           WHERE EXTRACT(YEAR FROM r.EMISSAO) = ?
+             AND EXTRACT(MONTH FROM r.EMISSAO) = ?
+             AND r.ID_EMPRESA IN (1, 2)
+             AND r.TIPOREC = 'RECIBO'
+             AND (r.CONTABILIZA IS NULL OR r.CONTABILIZA = 'S')""",
+        (ano, mes),
+    )
+    peso_recs = float(cur.fetchone()[0] or 0.0)
+    return peso_nfs + peso_recs
+
+
+def calcular_peso_aberto_kg(data_inicio_mes):
+    """Peso em aberto agora dos pedidos emitidos antes de data_inicio_mes."""
+    total = 0.0
+    for pedido in get_pedidos_processados():
+        try:
+            dt_emissao = datetime.strptime(pedido.get("raw_emissao") or "", "%Y-%m-%d").date()
+        except ValueError:
+            continue
+        peso_aberto = pedido.get("peso_total_kg", 0.0)
+        if dt_emissao < data_inicio_mes and pedido.get("status") != "Faturada" and peso_aberto > 0:
+            total += peso_aberto
+    return total
+
+
+_fechamento_lock = threading.Lock()
+
+
+def garantir_fechamentos():
+    """Fechamento automático: grava o peso faturado de cada mês encerrado desde o início
+    do histórico e o peso em aberto no início do mês corrente (uma única vez por mês)."""
+    if not _fechamento_lock.acquire(blocking=False):
+        return
+    try:
+        hoje = date.today()
+        atual = (hoje.year, hoje.month)
+        if atual < HISTORICO_INICIO:
+            return
+
+        meses_sem_saida = []
+        mes_ref = HISTORICO_INICIO
+        while mes_ref < atual:
+            fech = ler_fechamento(*mes_ref)
+            if not fech or fech["saida_kg"] is None:
+                meses_sem_saida.append(mes_ref)
+            mes_ref = proximo_mes(*mes_ref)
+
+        if meses_sem_saida:
+            conn = get_db_connection()
+            try:
+                cur = conn.cursor()
+                for ano, mes in meses_sem_saida:
+                    registrar_fechamento(ano, mes, "saida", calcular_saida_mes_kg(cur, ano, mes), "automatico")
+            finally:
+                conn.close()
+
+        fech_atual = ler_fechamento(*atual)
+        if not fech_atual or fech_atual["aberto_inicio_kg"] is None:
+            peso = calcular_peso_aberto_kg(date(atual[0], atual[1], 1))
+            registrar_fechamento(atual[0], atual[1], "aberto", peso, "automatico")
+    except Exception:
+        traceback.print_exc()
+    finally:
+        _fechamento_lock.release()
+
+
+def _loop_fechamento():
+    while True:
+        garantir_fechamentos()
+        time.sleep(INTERVALO_FECHAMENTO_SEG)
+
+
 @app.route("/api/calendario_pesos", methods=["GET"])
 def obter_calendario_pesos():
     conn = None
     try:
-        mes_param = request.args.get("mes")
-        ano_param = request.args.get("ano")
-        if not mes_param or not ano_param:
-            hoje = datetime.now()
-            mes_param = hoje.month
-            ano_param = hoje.year
+        hoje = datetime.now()
+        mes = int(request.args.get("mes") or hoje.month)
+        ano = int(request.args.get("ano") or hoje.year)
+        if not 1 <= mes <= 12:
+            return jsonify({"erro": "Mês inválido"}), 400
 
-        mes = int(mes_param)
-        ano = int(ano_param)
-
-        data_inicio_mes = datetime(ano, mes, 1).date()
-
-        if mes == 1:
-            mes_anterior = 12
-            ano_anterior = ano - 1
-        else:
-            mes_anterior = mes - 1
-            ano_anterior = ano
+        garantir_fechamentos()
+        ano_ant, mes_ant = mes_anterior(ano, mes)
 
         conn = get_db_connection()
         cur = conn.cursor()
-        
-        cur.execute(
-            """SELECT COALESCE(SUM(OI_BRUTO), 0) FROM FISCAL 
-               WHERE EMISS_ANO = ? AND EMISS_MES = ? AND ID_EMPRESA IN (1, 2) 
-                 AND (CANCELADA IS NULL OR CANCELADA <> 'S') 
-                 AND (IGNORAR_PESO IS NULL OR IGNORAR_PESO <> 'S')""",
-            (ano_anterior, mes_anterior),
-        )
-        peso_nfs = float(cur.fetchone()[0] or 0.0)
 
-        cur.execute(
-            """SELECT COALESCE(SUM(pfi.PESOTOTAL), 0)
-               FROM RECEBIMENTOS r
-               JOIN PFITEM pfi ON pfi.ID_PF = r.ID_PF AND pfi.ID_EMPRESA = r.ID_EMPRESA
-               WHERE EXTRACT(YEAR FROM r.EMISSAO) = ? 
-                 AND EXTRACT(MONTH FROM r.EMISSAO) = ?
-                 AND r.ID_EMPRESA IN (1, 2)
-                 AND r.TIPOREC = 'RECIBO'
-                 AND (r.CONTABILIZA IS NULL OR r.CONTABILIZA = 'S')""",
-            (ano_anterior, mes_anterior),
-        )
-        peso_recs = float(cur.fetchone()[0] or 0.0)
-        
-        peso_saida_anterior = peso_nfs + peso_recs
-        conn.close()
+        # Saída do mês anterior: valor congelado no fechamento ou, sem registro, calculado do ERP.
+        fech_anterior = ler_fechamento(ano_ant, mes_ant)
+        saida_registrada = bool(fech_anterior and fech_anterior["saida_kg"] is not None)
+        if saida_registrada:
+            saida_anterior = fech_anterior["saida_kg"]
+        else:
+            saida_anterior = calcular_saida_mes_kg(cur, ano_ant, mes_ant)
 
-        lista_pedidos = get_pedidos_processados()
-        
-        backlog_anterior_kg = 0.0
-        entrada_mes_kg = 0.0
+        # Entrada diária: todos os pedidos emitidos no dia, inclusive os já faturados.
+        cur.execute(
+            f"""SELECT p.EMISSAO, p.TOTAL_PESO FROM PEDIDOS p
+               WHERE EXTRACT(YEAR FROM p.EMISSAO) = ?
+                 AND EXTRACT(MONTH FROM p.EMISSAO) = ?
+                 AND p.ID_EMPRESA IN (1, 2)
+                 AND (p.CANCELADO IS NULL OR p.CANCELADO <> 'S')
+                 AND (p.PEDIDO_BLOQUEADO IS NULL OR p.PEDIDO_BLOQUEADO <> 'S')
+                 AND (p.DESATIVADO IS NULL OR p.DESATIVADO <> 'S')
+                 AND p.ID_NUMPED NOT IN ({SQL_PEDIDOS_EXCLUIDOS})""",
+            (ano, mes),
+        )
         dias_calendario = {str(dia): 0.0 for dia in range(1, 32)}
+        for emissao, peso in cur.fetchall():
+            if emissao:
+                dias_calendario[str(emissao.day)] += float(peso or 0.0)
+        entrada_mes_kg = sum(dias_calendario.values())
 
-        for pedido in lista_pedidos:
-            raw_emissao = pedido.get("raw_emissao")
-            if not raw_emissao:
-                continue
-
-            try:
-                dt_emissao = datetime.strptime(raw_emissao, "%Y-%m-%d").date()
-            except ValueError:
-                continue
-
-            if dt_emissao < data_inicio_mes:
-                peso_aberto = pedido.get("peso_total_kg", 0.0)
-                if pedido.get("status") != "Faturada" and peso_aberto > 0:
-                    backlog_anterior_kg += peso_aberto
-            elif dt_emissao.month == mes and dt_emissao.year == ano:
-                peso_bruto = pedido.get("peso_total_pedido_bruto", 0.0)
-                entrada_mes_kg += peso_bruto
-                dias_calendario[str(dt_emissao.day)] += peso_bruto
+        fech = ler_fechamento(ano, mes)
+        peso_entrada = fech["aberto_inicio_kg"] if fech else None
 
         return jsonify({
-            "saida_mes_anterior_kg": peso_saida_anterior,
-            "backlog_anterior_kg": backlog_anterior_kg,
+            "saida_mes_anterior_kg": saida_anterior,
+            "saida_registrada": saida_registrada,
+            "peso_entrada_kg": peso_entrada,
+            "peso_entrada_registrado_em": fech["aberto_registrado_em"] if fech else None,
             "entrada_mes_kg": entrada_mes_kg,
+            "total_mes_kg": (peso_entrada + entrada_mes_kg) if peso_entrada is not None else None,
             "dias_calendario": dias_calendario,
             "mes": mes,
             "ano": ano
@@ -754,8 +908,8 @@ def obter_orcamentos():
                 }
             sqlite_conn.close()
 
-        query = """
-            SELECT 
+        query = f"""
+            SELECT
                 o.ID_ORCAMENTO, o.EMISSAO, o.VALIDADE, o.ID_CLIENTE, o.NOME_CLIENTE,
                 o.COMPRADOR, o.FONE, o.COND_PAGTO, o.PRAZO_ENTREGA, o.TOTAL_GERAL, o.TOTAL_PESO,
                 i.REFERENCIA, i.MODELO_CAIXA, i.FECHAMENTO, i.COMP, i.LARG, i.ALT,
@@ -763,7 +917,7 @@ def obter_orcamentos():
             FROM ORCAMENT o
             LEFT JOIN ORCITEM i ON o.ID_ORCAMENTO = i.ID_ORCAMENTO
             WHERE (o.DESATIVADO IS NULL OR o.DESATIVADO <> 'S')
-              AND o.EMISSAO >= '2026-01-01'
+              AND o.EMISSAO >= '{DATA_CORTE_ORCAMENTOS}'
             ORDER BY o.ID_ORCAMENTO DESC
         """
         cur.execute(query)
@@ -900,8 +1054,8 @@ def obter_compras():
         kanban_local = carregar_kanban_local()
         status_ofs_local = kanban_local.get("ofs", {})
 
-        query = """
-            SELECT 
+        query = f"""
+            SELECT
                 c.ID_ORDCOMPRA, c.EMISSAO, c.DATA_ENTREGA, c.NOME_FORNECEDOR, c.TOTAL_KG, c.TOTAL_GERAL, c.STATUS, c.DATA_RECEBIDA,
                 ci.ITEM, ci.QUANT AS QUANT_CHAPA, ci.PESO AS PESO_CHAPA, (ci.QUANT * COALESCE(ci.PR_FL, 0)) AS VLTOT, ci.LARG, ci.COMP, co.ID_NUMOF, co.NOME AS CLIENTE, co.QUANT AS QUANT_OF,
                 p.REFERENCIA, p.FECHA
@@ -910,7 +1064,7 @@ def obter_compras():
             LEFT JOIN OC_CHAPA_OF co ON c.ID_ORDCOMPRA = co.ID_ORDCOMPRA AND ci.ITEM = co.ITEM
             LEFT JOIN ORDFAB o ON o.ID_NUMOF = co.ID_NUMOF
             LEFT JOIN PEDITEM p ON p.ID_NUMPED = o.ID_NUMPED AND p.ID_PRODUTO = o.ID_PRODUTO
-            WHERE c.ID_ORDCOMPRA >= 1863
+            WHERE c.ID_ORDCOMPRA >= {OC_INICIAL_COMPRAS}
             ORDER BY c.ID_ORDCOMPRA DESC
         """
         cur.execute(query)
@@ -1005,24 +1159,46 @@ def dar_baixa_compra(id_compra):
     try:
         conn = get_db_connection()
         cur = conn.cursor()
+
+        cur.execute(
+            "SELECT STATUS, DATA_RECEBIDA FROM OC_CHAPA WHERE ID_ORDCOMPRA = ?", (id_compra,)
+        )
+        oc = cur.fetchone()
+        if not oc:
+            return jsonify({"erro": f"OC {id_compra} não encontrada."}), 404
+        if limpar_texto(oc[0]).upper() == "RECEBIDA" or oc[1] is not None:
+            data_rec = format_date_safe(oc[1])
+            return jsonify({"erro": f"OC {id_compra} já foi recebida{' em ' + data_rec if data_rec else ''}."}), 409
+
+        cur.execute(
+            """SELECT DISTINCT co.ID_NUMOF, o.LIQUIDADO
+               FROM OC_CHAPA_OF co
+               LEFT JOIN ORDFAB o ON o.ID_NUMOF = co.ID_NUMOF
+               WHERE co.ID_ORDCOMPRA = ?""",
+            (id_compra,),
+        )
+        ofs = [(str(r[0]), limpar_texto(r[1]).upper() == "S") for r in cur.fetchall() if r[0]]
+
         cur.execute(
             "UPDATE OC_CHAPA SET STATUS = 'RECEBIDA', DATA_RECEBIDA = 'TODAY' WHERE ID_ORDCOMPRA = ?",
             (id_compra,),
         )
-        cur.execute(
-            "SELECT DISTINCT ID_NUMOF FROM OC_CHAPA_OF WHERE ID_ORDCOMPRA = ?",
-            (id_compra,),
-        )
-        ofs = cur.fetchall()
         conn.commit()
-
         invalidar_cache_db()
-        if ofs:
-            atualizacoes = {str(row[0]): "Produção" for row in ofs if row[0]}
-            if atualizacoes:
-                safe_update_status_lote("ofs", atualizacoes)
 
-        return jsonify({"sucesso": True}), 200
+        # Só tira de Pendente/Compras. OF que já avançou mantém o status para não gerar peso fantasma.
+        status_ofs_local = carregar_kanban_local().get("ofs", {})
+        atualizacoes, avisos = {}, []
+        for id_of, liquidada in ofs:
+            status_manual = (status_ofs_local.get(id_of) or {}).get("status")
+            if liquidada or status_manual == "Faturada":
+                avisos.append(f"OF {id_of} já está faturada.")
+            elif status_manual in ("Pendente", "Compras"):
+                atualizacoes[id_of] = "Produção"
+        if atualizacoes:
+            safe_update_status_lote("ofs", atualizacoes)
+
+        return jsonify({"sucesso": True, "ofs_para_producao": list(atualizacoes), "avisos": avisos}), 200
     except Exception as e:
         if conn:
             conn.rollback()
@@ -1032,12 +1208,23 @@ def dar_baixa_compra(id_compra):
             conn.close()
 
 
+def ler_qtd_produzida(valor):
+    """Quantidade informada pelo operador: None quando vazia. Lança ValueError se inválida."""
+    if valor is None or str(valor).strip() == "":
+        return None
+    qtd = float(str(valor).replace(",", "."))
+    if qtd < 0:
+        raise ValueError("Quantidade negativa")
+    return qtd
+
+
 @app.route("/api/pedidos/<int:id_pedido>/status", methods=["PUT"])
 def atualizar_status_unidade(id_pedido):
     try:
-        safe_update_status(
-            "pedidos", id_pedido, request.get_json().get("status", "Pendente")
-        )
+        novo_status = (request.get_json() or {}).get("status", "Pendente")
+        if novo_status not in STATUS_OF_VALIDOS:
+            return jsonify({"erro": f"Status inválido: {novo_status}"}), 400
+        safe_update_status("pedidos", id_pedido, novo_status)
         return jsonify({"sucesso": True}), 200
     except Exception as e:
         return jsonify({"erro": str(e)}), 500
@@ -1048,12 +1235,12 @@ def atualizar_status_of(id_pedido, id_of):
     try:
         dados = request.get_json() or {}
         novo_status = dados.get("status", "Pendente")
-        qtd_produzida = dados.get("qtd_produzida")
-        qtd_val = (
-            float(qtd_produzida)
-            if qtd_produzida is not None and str(qtd_produzida).strip() != ""
-            else None
-        )
+        if novo_status not in STATUS_OF_VALIDOS:
+            return jsonify({"erro": f"Status inválido: {novo_status}"}), 400
+        try:
+            qtd_val = ler_qtd_produzida(dados.get("qtd_produzida"))
+        except ValueError:
+            return jsonify({"erro": "Quantidade inválida"}), 400
 
         safe_update_status("ofs", id_of, novo_status, qtd_val)
         return jsonify({"sucesso": True}), 200
@@ -1063,22 +1250,43 @@ def atualizar_status_of(id_pedido, id_of):
 
 @app.route("/api/ofs/status-rapido", methods=["PUT"])
 def atualizar_status_rapido_of():
+    conn = None
     try:
         dados = request.get_json() or {}
-        id_of, novo_status = dados.get("id_of"), dados.get("status")
-        qtd_produzida = dados.get("qtd_produzida")
+        id_of = str(dados.get("id_of") or "").strip()
+        novo_status = dados.get("status")
         if not id_of or not novo_status:
-            return jsonify({"erro": "Obrigatórios"}), 400
+            return jsonify({"erro": "Informe a OF e o status."}), 400
+        if not id_of.isdigit():
+            return jsonify({"erro": f"OF {id_of} inválida: use só números."}), 400
+        if novo_status not in STATUS_OF_VALIDOS:
+            return jsonify({"erro": f"Status inválido: {novo_status}"}), 400
+        try:
+            qtd_val = ler_qtd_produzida(dados.get("qtd_produzida"))
+        except ValueError:
+            return jsonify({"erro": "Quantidade inválida"}), 400
 
-        qtd_val = (
-            float(qtd_produzida)
-            if qtd_produzida is not None and str(qtd_produzida).strip() != ""
-            else None
+        # Digitação errada não pode criar status para OF inexistente.
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT LIQUIDADO, DESATIVADO FROM ORDFAB WHERE ID_NUMOF = ?", (int(id_of),)
         )
+        of = cur.fetchone()
+        if not of:
+            return jsonify({"erro": f"OF {id_of} não encontrada."}), 404
+        if limpar_texto(of[1]).upper() == "S":
+            return jsonify({"erro": f"OF {id_of} está desativada."}), 409
+        if limpar_texto(of[0]).upper() == "S":
+            return jsonify({"erro": f"OF {id_of} já foi faturada."}), 409
+
         safe_update_status("ofs", id_of, novo_status, qtd_val)
         return jsonify({"sucesso": True}), 200
     except Exception as e:
         return jsonify({"erro": str(e)}), 500
+    finally:
+        if conn:
+            conn.close()
 
 
 @app.route("/api/pedidos/status-lote", methods=["PUT"])
@@ -1088,6 +1296,8 @@ def atualizar_status_lote():
         ids, novo_status = dados.get("ids", []), dados.get("status", "Pendente")
         if not ids:
             return jsonify({"erro": "Nenhum ID"}), 400
+        if novo_status not in STATUS_OF_VALIDOS:
+            return jsonify({"erro": f"Status inválido: {novo_status}"}), 400
         safe_update_status_lote("pedidos", {str(i): novo_status for i in ids})
         return jsonify({"sucesso": True}), 200
     except Exception as e:
@@ -1438,212 +1648,116 @@ def deletar_estoque(id_estoque):
         return jsonify({"erro": str(e)}), 500
 
 
+def _normalizar_endereco(endereco):
+    return " ".join(str(endereco or "").upper().split())
+
+
+def _ler_geocode_cache(id_cliente):
+    with db_lock:
+        conn = get_sqlite_conn()
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT latitude, longitude, endereco_consultado FROM clientes_geolocalizacao WHERE id_cliente = ?",
+            (id_cliente,),
+        )
+        row = cur.fetchone()
+        conn.close()
+    return row
+
+
+def _salvar_geocode_cache(id_cliente, endereco, lat, lng, place_id, origem):
+    agora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    with db_lock:
+        conn = get_sqlite_conn()
+        conn.execute(
+            """INSERT OR REPLACE INTO clientes_geolocalizacao
+               (id_cliente, endereco_consultado, latitude, longitude, place_id, origem, data_atualizacao)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (id_cliente, endereco, lat, lng, place_id, origem, agora),
+        )
+        conn.commit()
+        conn.close()
+
+
+def _geocode_google(endereco):
+    api_key = os.getenv("GOOGLE_MAPS_API_KEY")
+    if not api_key:
+        return None
+    resp = requests.get(
+        "https://maps.googleapis.com/maps/api/geocode/json",
+        params={"address": endereco, "components": "country:BR", "key": api_key},
+        timeout=TIMEOUT_GEOCODE,
+    )
+    data = resp.json()
+    if data.get("status") != "OK" or not data.get("results"):
+        print(f"DEBUG: Geocode Google sem resultado ({data.get('status')}). Tentando Nominatim...")
+        return None
+    result = data["results"][0]
+    loc = result["geometry"]["location"]
+    return loc["lat"], loc["lng"], result.get("place_id", ""), result["geometry"].get("location_type", "GOOGLE")
+
+
+def _geocode_nominatim(endereco):
+    resp = requests.get(
+        "https://nominatim.openstreetmap.org/search",
+        params={"q": endereco, "format": "json", "limit": 1, "countrycodes": "br"},
+        headers={"User-Agent": "FivelControl/1.0"},
+        timeout=TIMEOUT_GEOCODE,
+    )
+    data = resp.json()
+    if not isinstance(data, list) or not data:
+        print("DEBUG: Nominatim sem resultado. Tentando BrasilAPI via CEP...")
+        return None
+    return float(data[0]["lat"]), float(data[0]["lon"]), str(data[0].get("place_id", "")), "NOMINATIM"
+
+
+def _geocode_brasilapi(endereco):
+    cep_match = re.search(r"\b\d{5}-?\d{3}\b", endereco)
+    if not cep_match:
+        return None
+    cep = cep_match.group(0).replace("-", "")
+    resp = requests.get(f"https://brasilapi.com.br/api/cep/v2/{cep}", timeout=TIMEOUT_GEOCODE)
+    if resp.status_code != 200:
+        return None
+    coords = (resp.json().get("location") or {}).get("coordinates") or {}
+    if not coords.get("latitude") or not coords.get("longitude"):
+        return None
+    return float(coords["latitude"]), float(coords["longitude"]), cep, "BRASILAPI"
+
+
 @app.route("/api/geocode", methods=["GET"])
 def geocode_cliente():
     id_cliente = request.args.get("id_cliente")
     endereco_completo = request.args.get("endereco")
-    
+
     if not id_cliente or not endereco_completo:
         return jsonify({"erro": "id_cliente e endereco sao obrigatorios"}), 400
-        
+
     try:
-        # Check SQLite Cache
-        with db_lock:
-            conn = get_sqlite_conn()
-            cur = conn.cursor()
-            cur.execute("SELECT latitude, longitude FROM clientes_geolocalizacao WHERE id_cliente = ?", (id_cliente,))
-            row = cur.fetchone()
-            if row:
-                conn.close()
-                return jsonify({"lat": row[0], "lng": row[1], "cached": True}), 200
-            
-        # Not in cache, call Google Maps
-        api_key = os.getenv("GOOGLE_MAPS_API_KEY")
-        if not api_key:
-            if conn: conn.close()
-            return jsonify({"erro": "API Key nao configurada"}), 500
-            
-        url = f"https://maps.googleapis.com/maps/api/geocode/json"
-        params = {
-            "address": endereco_completo,
-            "components": "country:BR",
-            "key": api_key
-        }
-        resp = requests.get(url, params=params)
-        data = resp.json()
-        
-        if data.get("status") == "OK" and len(data.get("results", [])) > 0:
-            result = data["results"][0]
-            lat = result["geometry"]["location"]["lat"]
-            lng = result["geometry"]["location"]["lng"]
-            place_id = result.get("place_id", "")
-            origem = result["geometry"].get("location_type", "GOOGLE")
-            
-            # Save to cache
-            agora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            with db_lock:
-                cur.execute("""
-                    INSERT OR REPLACE INTO clientes_geolocalizacao 
-                    (id_cliente, endereco_consultado, latitude, longitude, place_id, origem, data_atualizacao)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
-                """, (id_cliente, endereco_completo, lat, lng, place_id, origem, agora))
-                conn.commit()
-                conn.close()
-                
-            return jsonify({"lat": lat, "lng": lng, "cached": False}), 200
-        else:
-            print(f"DEBUG: Geocode Google falhou: {data}. Tentando Nominatim...")
+        # O cache só vale se o endereço não mudou; evita repetir chamadas pagas ao Google.
+        cache = _ler_geocode_cache(id_cliente)
+        if cache and _normalizar_endereco(cache[2]) == _normalizar_endereco(endereco_completo):
+            return jsonify({"lat": cache[0], "lng": cache[1], "cached": True}), 200
+
+        # Cascata Google -> Nominatim -> BrasilAPI: falha ou timeout passa para o próximo.
+        for provedor in (_geocode_google, _geocode_nominatim, _geocode_brasilapi):
             try:
-                nom_url = "https://nominatim.openstreetmap.org/search"
-                nom_params = {"q": endereco_completo, "format": "json", "limit": 1}
-                nom_headers = {"User-Agent": "FivelControl/1.0"}
-                nom_resp = requests.get(nom_url, params=nom_params, headers=nom_headers)
-                nom_data = nom_resp.json()
-                
-                if isinstance(nom_data, list) and len(nom_data) > 0:
-                    result = nom_data[0]
-                    lat = float(result["lat"])
-                    lng = float(result["lon"])
-                    place_id = str(result.get("place_id", ""))
-                    origem = "NOMINATIM"
-                    
-                    agora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                    with db_lock:
-                        cur.execute("""
-                            INSERT OR REPLACE INTO clientes_geolocalizacao 
-                            (id_cliente, endereco_consultado, latitude, longitude, place_id, origem, data_atualizacao)
-                            VALUES (?, ?, ?, ?, ?, ?, ?)
-                        """, (id_cliente, endereco_completo, lat, lng, place_id, origem, agora))
-                        conn.commit()
-                        conn.close()
-                    return jsonify({"lat": lat, "lng": lng, "cached": False}), 200
-                else:
-                    print(f"DEBUG: Nominatim falhou. Tentando BrasilAPI via CEP...")
-                    import re
-                    cep_match = re.search(r'\b\d{5}-?\d{3}\b', endereco_completo)
-                    if cep_match:
-                        cep = cep_match.group(0).replace('-', '')
-                        b_url = f"https://brasilapi.com.br/api/cep/v2/{cep}"
-                        b_resp = requests.get(b_url, timeout=5)
-                        if b_resp.status_code == 200:
-                            b_data = b_resp.json()
-                            if "location" in b_data and "coordinates" in b_data["location"]:
-                                coords = b_data["location"]["coordinates"]
-                                if coords.get("latitude") and coords.get("longitude"):
-                                    lat = float(coords["latitude"])
-                                    lng = float(coords["longitude"])
-                                    place_id = b_data.get("cep", "")
-                                    origem = "BRASILAPI"
-                                    
-                                    agora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                                    with db_lock:
-                                        cur.execute("""
-                                            INSERT OR REPLACE INTO clientes_geolocalizacao 
-                                            (id_cliente, endereco_consultado, latitude, longitude, place_id, origem, data_atualizacao)
-                                            VALUES (?, ?, ?, ?, ?, ?, ?)
-                                        """, (id_cliente, endereco_completo, lat, lng, place_id, origem, agora))
-                                        conn.commit()
-                                        conn.close()
-                                    return jsonify({"lat": lat, "lng": lng, "cached": False}), 200
-            except Exception as ex_nom:
-                print(f"ERRO nos fallbacks de geocode: {str(ex_nom)}")
-                
-            if conn:
-                conn.close()
-            return jsonify({"erro": "Nao foi possivel geolocalizar o endereco"}), 500
+                resultado = provedor(endereco_completo)
+            except Exception as ex:
+                print(f"ERRO no geocode ({provedor.__name__}): {ex}")
+                continue
+            if resultado:
+                lat, lng, place_id, origem = resultado
+                _salvar_geocode_cache(id_cliente, endereco_completo, lat, lng, place_id, origem)
+                return jsonify({"lat": lat, "lng": lng, "cached": False}), 200
+
+        # Endereço mudou e o novo não foi encontrado: mantém a posição conhecida.
+        if cache:
+            return jsonify({"lat": cache[0], "lng": cache[1], "cached": True, "desatualizado": True}), 200
+        return jsonify({"erro": "Nao foi possivel geolocalizar o endereco"}), 500
     except Exception as e:
-        print(f"ERRO no geocode: {str(e)}")
-        if conn:
-            conn.close()
         traceback.print_exc()
         return jsonify({"erro": str(e)}), 500
-
-@app.route("/api/rastreamento", methods=["GET"])
-def obter_rastreamento():
-    try:
-        numero_romaneio = request.args.get("numero")
-        if not numero_romaneio:
-            return jsonify({"erro": "Numero do romaneio nao fornecido"}), 400
-
-        conn = None
-        cur = None
-        with db_lock:
-            conn = get_sqlite_conn()
-            cur = conn.cursor()
-            
-            # 1. BuscarПеdidios
-            cur.execute("""
-                SELECT id_pedido, status
-                FROM pedidos
-                WHERE numero_romaneio = ?
-            """, (numero_romaneio,))
-            pedidos = [{"id": r[0], "status": r[1]} for r in cur.fetchall()]
-
-            # 2. Buscar OFs
-            cur.execute("""
-                SELECT id_of, status
-                FROM ofs
-                WHERE numero_romaneio = ?
-            """, (numero_romaneio,))
-            ofs = [{"id": r[0], "status": r[1]} for r in cur.fetchall()]
-
-            # 3. Buscar Categ_compras
-            cur.execute("""
-                SELECT id_compra, status
-                FROM categ_compras
-                WHERE numero_romaneio = ?
-            """, (numero_romaneio,))
-            compras = [{"id": r[0], "status": r[1]} for r in cur.fetchall()]
-
-            # 4. Buscar Estoque_manual
-            cur.execute("""
-                SELECT id_estoque, status
-                FROM estoque_manual
-                WHERE numero_romaneio = ?
-            """, (numero_romaneio,))
-            estoques = [{"id": r[0], "status": r[1]} for r in cur.fetchall()]
-
-        # 5. Buscar Estoque_auto
-        estoque_auto = []
-        cur.execute("""
-            SELECT id_ft_principal, cliente, quantidade, data_criacao
-            FROM estoque_auto
-            WHERE numero_romaneio = ?
-        """, (numero_romaneio,))
-        rows_auto = cur.fetchall()
-        
-        colunas_auto = [desc[0] for desc in cur.description]
-        for row in rows_auto:
-            d = dict(zip(colunas_auto, row))
-            # Formatar para o padrão desejado
-            estoque_auto.append({
-                "id_estoque": d.get("id_estoque"),
-                "cliente": d.get("cliente"),
-                "quantidade": d.get("quantidade"),
-                "data_criacao": d.get("data_criacao")
-            })
-
-        # Montar resposta
-        hoje = datetime.now()
-        return jsonify(
-            {
-                "numero_romaneio": numero_romaneio,
-                "componentes": {
-                    "pedidos": pedidos,
-                    "ofs": ofs,
-                    "compras_recebidas": compras,
-                    "estoque_manual": estoques,
-                    "estoque_automatico": estoque_auto,
-                    "total_nfs_mes": len(compras) + len(estoques)
-                },
-                "mes_referencia": f"{hoje.month:02d}/{hoje.year}",
-            }
-        ), 200
-    except Exception as e:
-        return jsonify({"erro": str(e)}), 500
-    finally:
-        if conn:
-            conn.close()
 
 
 def decode_polyline(polyline_str):
@@ -1687,8 +1801,8 @@ def optimize_route():
         origem = {
             "location": {
                 "latLng": {
-                    "latitude": -23.70938551545255,
-                    "longitude": -46.59345608749334
+                    "latitude": COORDENADAS_FABRICA[0],
+                    "longitude": COORDENADAS_FABRICA[1]
                 }
             }
         }
@@ -1720,8 +1834,12 @@ def optimize_route():
             "optimizeWaypointOrder": True
         }
         
-        resp = requests.post(url, headers=headers, json=payload)
-        data = resp.json()
+        # Falha ou timeout do Google cai para o OSRM em vez de derrubar a requisição.
+        try:
+            data = requests.post(url, headers=headers, json=payload, timeout=TIMEOUT_ROTAS).json()
+        except Exception as ex:
+            print(f"ERRO no Google Routes: {ex}")
+            data = {}
         
         if "routes" in data and len(data["routes"]) > 0:
             route = data["routes"][0]
@@ -1756,8 +1874,8 @@ def optimize_route():
             for p in pedidos:
                 coords_str += f";{p['lng']},{p['lat']}"
                 
-            osrm_url = f"http://router.project-osrm.org/trip/v1/driving/{coords_str}?roundtrip=true&source=first&destination=last&overview=full"
-            osrm_resp = requests.get(osrm_url)
+            osrm_url = f"https://router.project-osrm.org/trip/v1/driving/{coords_str}?roundtrip=true&source=first&destination=last&overview=full"
+            osrm_resp = requests.get(osrm_url, timeout=TIMEOUT_ROTAS)
             osrm_data = osrm_resp.json()
             
             if osrm_data.get("code") == "Ok":
@@ -1978,4 +2096,5 @@ def serve_frontend(path):
     return jsonify({"mensagem": "API do FIVEL Control ativa. Frontend dist não encontrado."}), 200
 
 if __name__ == "__main__":
-    app.run(debug=False, host="0.0.0.0", port=5000, threaded=True)
+    threading.Thread(target=_loop_fechamento, name="fechamento-mensal", daemon=True).start()
+    app.run(debug=False, host="0.0.0.0", port=int(os.getenv("FIVEL_PORT", 5000)), threaded=True)
