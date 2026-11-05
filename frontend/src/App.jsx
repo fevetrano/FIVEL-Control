@@ -2,11 +2,12 @@ import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import axios from 'axios'
 import { APIProvider, Map, AdvancedMarker, InfoWindow, Pin, useMap as useGoogleMap } from '@vis.gl/react-google-maps'
 
+import { API_URL } from './api.js'
+
 const COORDENADAS_EMPRESA = [-23.70938551545255, -46.59345608749334]
-// VITE_API_URL permite apontar uma cópia de testes para outro backend (ex.: http://localhost:5001).
-const API_URL = import.meta.env.VITE_API_URL || ((window.location.port === '5000')
-  ? window.location.origin
-  : `http://${window.location.hostname || 'localhost'}:5000`);
+
+// Perfil Vendas: só estas abas, sem valores, pesos nem botões de alteração.
+const ABAS_VENDAS = ['producao', 'prazos', 'orcamentos', 'comercial'];
 
 // Sem limite, uma requisição travada deixaria a gravação "pendente" para sempre.
 axios.defaults.timeout = 90000;
@@ -65,7 +66,8 @@ function MapPolyline({ positions, color, weight }) {
   return null;
 }
 
-function App() {
+function App({ usuario, onSair }) {
+  const ehAdmin = usuario?.perfil === 'admin';
   const [isDarkMode, setIsDarkMode] = useState(true);
   const [pedidos, setPedidos] = useState([])
   const [orcamentos, setOrcamentos] = useState([])
@@ -392,21 +394,25 @@ function App() {
 
   useEffect(() => {
     carregarPedidos();
-    carregarCompras();
     carregarOrcamentos();
-    carregarEstoque();
-    carregarResumos();
+    if (ehAdmin) {
+      carregarCompras();
+      carregarEstoque();
+      carregarResumos();
+    }
 
     const intervalId = setInterval(() => {
       carregarPedidos(true);
-      carregarCompras(true);
       carregarOrcamentos(true);
-      carregarEstoque(true);
-      carregarResumos();
+      if (ehAdmin) {
+        carregarCompras(true);
+        carregarEstoque(true);
+        carregarResumos();
+      }
     }, 5000)
 
     return () => clearInterval(intervalId)
-  }, [carregarPedidos, carregarCompras, carregarOrcamentos, carregarEstoque, carregarResumos])
+  }, [carregarPedidos, carregarCompras, carregarOrcamentos, carregarEstoque, carregarResumos, ehAdmin])
 
   useEffect(() => {
     setLimiteExibicao(20);
@@ -682,6 +688,7 @@ function App() {
   }
 
   const alterarAba = (novaAba) => {
+    if (!ehAdmin && !ABAS_VENDAS.includes(novaAba)) return;
     setAbaAtiva(novaAba);
   };
 
@@ -970,10 +977,12 @@ function App() {
 
         <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 w-full sm:w-auto">
 
-          <button onClick={() => setModalBipadorAberto(true)} className={`flex items-center justify-center gap-2 bg-[#5DD62C] hover:bg-[#337418] text-[#0F0F0F] hover:text-[#F8F8F8] px-4 py-3 sm:py-2 rounded-xl border border-transparent shadow-sm hover:scale-105 transition-all text-xs font-bold w-full sm:w-auto`}>
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 4v16m8-8H4" /></svg>
-            Lançador de OFs
-          </button>
+          {ehAdmin && (
+            <button onClick={() => setModalBipadorAberto(true)} className={`flex items-center justify-center gap-2 bg-[#5DD62C] hover:bg-[#337418] text-[#0F0F0F] hover:text-[#F8F8F8] px-4 py-3 sm:py-2 rounded-xl border border-transparent shadow-sm hover:scale-105 transition-all text-xs font-bold w-full sm:w-auto`}>
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 4v16m8-8H4" /></svg>
+              Lançador de OFs
+            </button>
+          )}
 
           <button onClick={() => setIsDarkMode(!isDarkMode)} className={`flex items-center justify-center gap-2 ${t.card} px-4 py-3 sm:py-2 rounded-xl border ${t.border} shadow-sm hover:scale-105 transition-all text-xs font-bold ${t.textSecondary} hover:${t.textPrimary} w-full sm:w-auto`}>
             {isDarkMode ? 'Modo Claro' : 'Modo Escuro'}
@@ -983,10 +992,17 @@ function App() {
             <span className={`text-xs font-medium ${t.textPrimary}`}>Monitor Ativo</span>
           </div>
 
-          <button onClick={() => setModalEstoqueAberto(true)} className={`flex items-center justify-center gap-2 bg-[#5DD62C] hover:bg-[#337418] text-[#0F0F0F] hover:text-[#F8F8F8] px-4 py-3 sm:py-2 rounded-xl border border-transparent shadow-sm hover:scale-105 transition-all text-xs font-bold w-full sm:w-auto`}>
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4" /></svg>
-            Estoque Manual
-          </button>
+          {ehAdmin && (
+            <button onClick={() => setModalEstoqueAberto(true)} className={`flex items-center justify-center gap-2 bg-[#5DD62C] hover:bg-[#337418] text-[#0F0F0F] hover:text-[#F8F8F8] px-4 py-3 sm:py-2 rounded-xl border border-transparent shadow-sm hover:scale-105 transition-all text-xs font-bold w-full sm:w-auto`}>
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4" /></svg>
+              Estoque Manual
+            </button>
+          )}
+
+          <div className={`flex items-center justify-between sm:justify-center gap-3 ${t.card} pl-4 pr-1.5 py-1.5 rounded-xl border ${t.border} shadow-sm w-full sm:w-auto`}>
+            <span className={`text-xs font-bold ${t.textPrimary} truncate max-w-[160px]`} title={usuario?.login}>{usuario?.nome}</span>
+            <button onClick={onSair} className={`px-3 py-2 sm:py-1 rounded-lg text-xs font-bold ${t.textSecondary} hover:text-red-400 border ${t.border} transition-colors`}>Sair</button>
+          </div>
         </div>
       </header>
 
@@ -1140,13 +1156,21 @@ function App() {
 
       {/* SELETOR DE ABAS */}
       <div className={`w-full mx-auto mb-6 sm:mb-8 flex gap-2 border-b ${t.border} pb-px overflow-x-auto relative z-0 scrollbar-hide`}>
-        <button onClick={() => alterarAba('mapa')} className={`pb-3 px-4 font-medium text-sm transition-colors relative whitespace-nowrap ${abaAtiva === 'mapa' ? `${t.textAccent} border-b-2 ${t.borderAccent}` : `${t.textSecondary} hover:${t.textPrimary}`}`}>Expedição e Mapa</button>
+        {ehAdmin && (
+          <button onClick={() => alterarAba('mapa')} className={`pb-3 px-4 font-medium text-sm transition-colors relative whitespace-nowrap ${abaAtiva === 'mapa' ? `${t.textAccent} border-b-2 ${t.borderAccent}` : `${t.textSecondary} hover:${t.textPrimary}`}`}>Expedição e Mapa</button>
+        )}
         <button onClick={() => alterarAba('producao')} className={`pb-3 px-4 font-medium text-sm transition-colors relative whitespace-nowrap ${abaAtiva === 'producao' ? `${t.textAccent} border-b-2 ${t.borderAccent}` : `${t.textSecondary} hover:${t.textPrimary}`}`}>Produção</button>
         <button onClick={() => alterarAba('prazos')} className={`pb-3 px-4 font-medium text-sm transition-colors relative whitespace-nowrap ${abaAtiva === 'prazos' ? `${t.textAccent} border-b-2 ${t.borderAccent}` : `${t.textSecondary} hover:${t.textPrimary}`}`}>Pedidos</button>
         <button onClick={() => alterarAba('orcamentos')} className={`pb-3 px-4 font-medium text-sm transition-colors relative whitespace-nowrap ${abaAtiva === 'orcamentos' ? `${t.textAccent} border-b-2 ${t.borderAccent}` : `${t.textSecondary} hover:${t.textPrimary}`}`}>Orçamentos</button>
-        <button onClick={() => alterarAba('compras')} className={`pb-3 px-4 font-medium text-sm transition-colors relative whitespace-nowrap ${abaAtiva === 'compras' ? `${t.textAccent} border-b-2 ${t.borderAccent}` : `${t.textSecondary} hover:${t.textPrimary}`}`}>Compras</button>
-        <button onClick={() => alterarAba('estoque')} className={`pb-3 px-4 font-medium text-sm transition-colors relative whitespace-nowrap ${abaAtiva === 'estoque' ? `${t.textAccent} border-b-2 ${t.borderAccent}` : `${t.textSecondary} hover:${t.textPrimary}`}`}>Estoque de Caixas</button>
-        <button onClick={() => alterarAba('dashboard')} className={`pb-3 px-4 font-medium text-sm transition-colors relative whitespace-nowrap ${abaAtiva === 'dashboard' ? `${t.textAccent} border-b-2 ${t.borderAccent}` : `${t.textSecondary} hover:${t.textPrimary}`}`}>Dashboard</button>
+        {ehAdmin && (
+          <button onClick={() => alterarAba('compras')} className={`pb-3 px-4 font-medium text-sm transition-colors relative whitespace-nowrap ${abaAtiva === 'compras' ? `${t.textAccent} border-b-2 ${t.borderAccent}` : `${t.textSecondary} hover:${t.textPrimary}`}`}>Compras</button>
+        )}
+        {ehAdmin && (
+          <button onClick={() => alterarAba('estoque')} className={`pb-3 px-4 font-medium text-sm transition-colors relative whitespace-nowrap ${abaAtiva === 'estoque' ? `${t.textAccent} border-b-2 ${t.borderAccent}` : `${t.textSecondary} hover:${t.textPrimary}`}`}>Estoque de Caixas</button>
+        )}
+        {ehAdmin && (
+          <button onClick={() => alterarAba('dashboard')} className={`pb-3 px-4 font-medium text-sm transition-colors relative whitespace-nowrap ${abaAtiva === 'dashboard' ? `${t.textAccent} border-b-2 ${t.borderAccent}` : `${t.textSecondary} hover:${t.textPrimary}`}`}>Dashboard</button>
+        )}
         <button onClick={() => alterarAba('comercial')} className={`pb-3 px-4 font-medium text-sm transition-colors relative whitespace-nowrap ${abaAtiva === 'comercial' ? `${t.textAccent} border-b-2 ${t.borderAccent}` : `${t.textSecondary} hover:${t.textPrimary}`}`}>Comercial</button>
       </div>
 
@@ -1393,9 +1417,11 @@ function App() {
                   <div className={`${t.bgAccentSoft} ${t.textAccent} font-mono px-5 py-2.5 rounded-xl text-lg font-bold border ${t.borderAccentSoft} whitespace-nowrap`}>
                     {ofsEmProducaoFiltradas.length} OFs
                   </div>
-                  <div className={`bg-purple-500/10 text-purple-500 font-mono px-5 py-2.5 rounded-xl text-lg font-bold border border-purple-500/20 whitespace-nowrap`}>
-                    {formatarKg(pesoTotalEmProducao)} kg
-                  </div>
+                  {ehAdmin && (
+                    <div className={`bg-purple-500/10 text-purple-500 font-mono px-5 py-2.5 rounded-xl text-lg font-bold border border-purple-500/20 whitespace-nowrap`}>
+                      {formatarKg(pesoTotalEmProducao)} kg
+                    </div>
+                  )}
                 </div>
               </div>
 
@@ -1431,9 +1457,9 @@ function App() {
 
                       <div className={`grid grid-cols-2 gap-y-4 gap-x-2 py-4 border-y ${t.border} mb-4`}>
                         <div>
-                          <span className={`block text-[10px] ${t.textSecondary} uppercase tracking-wider mb-1`}>Qtd OF / Peso</span>
+                          <span className={`block text-[10px] ${t.textSecondary} uppercase tracking-wider mb-1`}>{ehAdmin ? 'Qtd OF / Peso' : 'Qtd OF'}</span>
                           <span className={`font-mono font-bold ${t.textPrimary} text-sm`}>{Number(of.qtd_prog).toLocaleString('pt-BR')} <span className="text-[10px] font-sans font-normal">cx</span></span>
-                          <div className={`font-mono font-bold ${t.textAccent} text-xs`}>{formatarKg(of.peso_restante)} kg</div>
+                          {ehAdmin && <div className={`font-mono font-bold ${t.textAccent} text-xs`}>{formatarKg(of.peso_restante)} kg</div>}
                         </div>
                         <div>
                           <span className={`block text-[10px] ${t.textSecondary} uppercase tracking-wider mb-1`}>Qualidade</span>
@@ -1458,7 +1484,7 @@ function App() {
                         </div>
                       </div>
 
-                      <div className="flex gap-2 justify-end mt-auto">
+                      {ehAdmin && <div className="flex gap-2 justify-end mt-auto">
                         <button
                           onClick={() => alternarStatusOf(of.pedido.id, of.id_numof, 'Pendente')}
                           className={`px-3 py-2.5 rounded-lg text-[10px] font-bold border transition-all bg-amber-500/10 text-amber-500 border-amber-500/20 hover:bg-amber-500/20`}
@@ -1472,7 +1498,7 @@ function App() {
                         >
                           <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7" /></svg> Marcar Pronto
                         </button>
-                      </div>
+                      </div>}
                     </div>
                   )
                 })}
@@ -1539,7 +1565,8 @@ function App() {
                             <select
                               value={orc.status || 'Em Aberto'}
                               onChange={(e) => atualizarStatusOrcamento(orc.id_orcamento, e.target.value)}
-                              className={`text-[10px] ml-1 font-bold rounded-full px-2 py-0.5 border cursor-pointer focus:outline-none bg-transparent ${orc.status === 'Aprovado' ? 'text-[#5DD62C] border-[#5DD62C]/30' : orc.status === 'Reprovado' ? 'text-red-400 border-red-400/30' : 'text-amber-400 border-amber-400/30'}`}
+                              disabled={!ehAdmin}
+                              className={`text-[10px] ml-1 font-bold rounded-full px-2 py-0.5 border ${ehAdmin ? 'cursor-pointer' : 'cursor-default'} focus:outline-none bg-transparent ${orc.status === 'Aprovado' ? 'text-[#5DD62C] border-[#5DD62C]/30' : orc.status === 'Reprovado' ? 'text-red-400 border-red-400/30' : 'text-amber-400 border-amber-400/30'}`}
                             >
                               <option className="bg-[#1a1a1a] text-amber-400" value="Em Aberto">Em Aberto</option>
                               <option className="bg-[#1a1a1a] text-[#5DD62C]" value="Aprovado">Aprovado</option>
@@ -1556,11 +1583,13 @@ function App() {
                           <span className={`font-medium ${t.textPrimary} truncate block`} title={orc.comprador}>{orc.comprador || 'Não Informado'}</span>
                           <span className="font-mono mt-0.5 block">{orc.telefone || 'Sem telefone'}</span>
                         </div>
-                        <div>
-                          <span className="block text-[10px] uppercase mb-0.5">Valor Total</span>
-                          <span className={`font-mono font-bold ${t.textPrimary} text-sm`}>R$ {(orc.total_geral || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</span>
-                          <span className="font-mono mt-0.5 block">{formatarKg(orc.total_peso)} kg</span>
-                        </div>
+                        {ehAdmin && (
+                          <div>
+                            <span className="block text-[10px] uppercase mb-0.5">Valor Total</span>
+                            <span className={`font-mono font-bold ${t.textPrimary} text-sm`}>R$ {(orc.total_geral || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</span>
+                            <span className="font-mono mt-0.5 block">{formatarKg(orc.total_peso)} kg</span>
+                          </div>
+                        )}
                       </div>
 
                       <div className={`flex gap-3 text-[10px] uppercase font-bold tracking-wider pt-3 border-t ${t.border} ${t.textSecondary}`}>
@@ -1596,10 +1625,10 @@ function App() {
                         </div>
                       ) : (
                         <div
-                          onClick={() => { setTextoNotaTemp(orc.anotacao || ""); setEditandoNotaOrcamento(orc.id_orcamento); }}
-                          className={`w-full ${t.inner} border ${t.border} border-dashed rounded-lg p-3 text-xs ${orc.anotacao ? t.textPrimary : `${t.textSecondary} italic`} cursor-pointer hover:border-[#5DD62C]/50 transition-colors min-h-[60px] whitespace-pre-wrap`}
+                          onClick={ehAdmin ? () => { setTextoNotaTemp(orc.anotacao || ""); setEditandoNotaOrcamento(orc.id_orcamento); } : undefined}
+                          className={`w-full ${t.inner} border ${t.border} border-dashed rounded-lg p-3 text-xs ${orc.anotacao ? t.textPrimary : `${t.textSecondary} italic`} ${ehAdmin ? 'cursor-pointer hover:border-[#5DD62C]/50' : ''} transition-colors min-h-[60px] whitespace-pre-wrap`}
                         >
-                          {orc.anotacao || "Clique para adicionar uma anotação sobre esta negociação..."}
+                          {orc.anotacao || (ehAdmin ? "Clique para adicionar uma anotação sobre esta negociação..." : "Sem anotações.")}
                         </div>
                       )}
                     </div>
@@ -1622,7 +1651,7 @@ function App() {
                               </div>
                               <div className={`flex justify-between text-[10px] ${t.textSecondary} font-mono mt-1.5`}>
                                 <span>Qtd: {item.quantidade} cx</span>
-                                <span>R$ {item.vl_unit.toLocaleString('pt-BR', { minimumFractionDigits: 4 })} /un</span>
+                                {ehAdmin && <span>R$ {item.vl_unit.toLocaleString('pt-BR', { minimumFractionDigits: 4 })} /un</span>}
                               </div>
                               <div className={`flex justify-between text-[10px] ${t.textSecondary} font-mono mt-0.5`}>
                                 <span>{item.onda} / {item.qualidade}</span>
@@ -1661,19 +1690,21 @@ function App() {
           return (
             <div className="space-y-6 sm:space-y-8 w-full relative z-0">
 
-              <div className="flex justify-end mb-4">
-                <button onClick={() => alterarAba('calendario')} className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-bold shadow-md transition-all ${t.bgAccentSoft} ${t.textAccent} hover:scale-105 border ${t.borderAccentSoft}`}>
-                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"></path></svg>
-                  Visualização Mensal de Pesos
-                </button>
-              </div>
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 md:gap-5">
-                <div className={`${t.card} p-5 md:p-6 rounded-2xl shadow-md flex flex-col justify-center transition-all duration-300`}>
+              {ehAdmin && (
+                <div className="flex justify-end mb-4">
+                  <button onClick={() => alterarAba('calendario')} className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-bold shadow-md transition-all ${t.bgAccentSoft} ${t.textAccent} hover:scale-105 border ${t.borderAccentSoft}`}>
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"></path></svg>
+                    Visualização Mensal de Pesos
+                  </button>
+                </div>
+              )}
+              <div className={`grid grid-cols-1 ${ehAdmin ? 'sm:grid-cols-3' : ''} gap-4 md:gap-5`}>
+                {ehAdmin && <div className={`${t.card} p-5 md:p-6 rounded-2xl shadow-md flex flex-col justify-center transition-all duration-300`}>
                   <p className={`text-[12px] sm:text-[13px] font-medium ${t.textSecondary} mb-1.5`}>Faturamento em Aberto</p>
                   <p className={`text-2xl md:text-3xl font-bold ${t.textPrimary}`}>R$ {(faturamentoAtual || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</p>
-                </div>
+                </div>}
 
-                <div className={`${t.card} p-5 md:p-6 rounded-2xl shadow-md flex flex-col justify-center relative transition-all duration-300`}>
+                {ehAdmin && <div className={`${t.card} p-5 md:p-6 rounded-2xl shadow-md flex flex-col justify-center relative transition-all duration-300`}>
                   <div className="flex justify-between items-center mb-1.5">
                     <p className={`text-[12px] sm:text-[13px] font-medium ${t.textSecondary}`}>Peso em Aberto</p>
 
@@ -1693,7 +1724,7 @@ function App() {
                   <p className={`text-2xl md:text-3xl font-bold ${t.textPrimary}`}>
                     {formatarKg(pesoAtual)} <span className={`text-sm md:text-base font-medium ${t.textAccent} ml-1`}>kg</span>
                   </p>
-                </div>
+                </div>}
 
                 <div className={`${t.card} p-5 md:p-6 rounded-2xl shadow-md flex flex-col justify-center transition-all duration-300`}>
                   <p className={`text-[12px] sm:text-[13px] font-medium ${t.textSecondary} mb-1.5`}>Pedidos Ativos</p>
@@ -1783,17 +1814,19 @@ function App() {
                                     <span className={`font-mono font-bold ${t.textPrimary}`}>{pedido.total_itens_abertos || 0}</span>
                                   </div>
                                 )}
-                                <div className="text-left md:text-center w-[45%] md:w-auto">
-                                  <span className={`block text-[10px] ${t.textSecondary} uppercase tracking-wider mb-0.5`}>{isFaturadoGeral ? 'Peso Faturado' : 'Peso'}</span>
-                                  <span className={`font-mono font-bold ${isFaturadoGeral ? t.textSecondary : t.textAccent}`}>{formatarKg(pedido.peso_total_kg)} kg</span>
-                                </div>
+                                {ehAdmin && (
+                                  <div className="text-left md:text-center w-[45%] md:w-auto">
+                                    <span className={`block text-[10px] ${t.textSecondary} uppercase tracking-wider mb-0.5`}>{isFaturadoGeral ? 'Peso Faturado' : 'Peso'}</span>
+                                    <span className={`font-mono font-bold ${isFaturadoGeral ? t.textSecondary : t.textAccent}`}>{formatarKg(pedido.peso_total_kg)} kg</span>
+                                  </div>
+                                )}
                                 <div className="text-left md:text-center w-[45%] md:w-auto">
                                   <span className={`block text-[10px] ${t.textSecondary} uppercase tracking-wider mb-0.5`}>Emissão</span>
                                   <span className={`font-mono ${t.textPrimary}`}>{pedido.data_emissao || '-'}</span>
                                 </div>
                                 <div className="w-[45%] md:w-auto flex flex-col gap-2 items-end">
                                   {isFaturadoGeral ? <span className={`text-[11px] font-bold ${t.textSecondary}`}>ENTREGUE</span> : renderizarTagPrazo(pedido.dias_restantes, pedido.data_entrega)}
-                                  {!isFaturadoGeral && (
+                                  {ehAdmin && !isFaturadoGeral && (
                                     <button onClick={(e) => { e.stopPropagation(); alterarStatusPedido(pedido.id, 'Faturada'); }} className={`text-[9px] uppercase tracking-wider font-bold bg-[#5DD62C] hover:bg-[#337418] text-[#0F0F0F] hover:text-[#F8F8F8] px-2 py-1 rounded shadow-sm transition-all`}>
                                       Forçar Baixa
                                     </button>
@@ -1815,9 +1848,9 @@ function App() {
                                           <th className="py-2.5 px-3">Referência</th>
                                           <th className="py-2.5 px-3 text-center">Data Prog.</th>
                                           <th className="py-2.5 px-3 text-center">Qtde (Restante)</th>
-                                          <th className="py-2.5 px-3 text-right">Peso (Total)</th>
-                                          <th className="py-2.5 px-3 text-right">Val. Unit.</th>
-                                          <th className="py-2.5 px-3 text-right">Val. Total</th>
+                                          {ehAdmin && <th className="py-2.5 px-3 text-right">Peso (Total)</th>}
+                                          {ehAdmin && <th className="py-2.5 px-3 text-right">Val. Unit.</th>}
+                                          {ehAdmin && <th className="py-2.5 px-3 text-right">Val. Total</th>}
                                           <th className="py-2.5 px-3 text-center">Status OF</th>
                                         </tr>
                                       </thead>
@@ -1836,11 +1869,11 @@ function App() {
                                               <td className={`py-3 px-3 font-medium ${t.textPrimary}`}>{item.referencia || '-'}</td>
                                               <td className="py-3 px-3 text-center font-mono">{item.data_programada || '-'}</td>
                                               <td className={`py-3 px-3 text-center font-mono ${t.textPrimary}`}>{Number(qtdExibir).toLocaleString('pt-BR')} / {Number(item.qtd_prog).toLocaleString('pt-BR')}</td>
-                                              <td className={`py-3 px-3 text-right font-mono ${t.textAccent}`}>{formatarKg(pesoExibir)} kg</td>
-                                              <td className={`py-3 px-3 text-right font-mono ${t.textSecondary}`}>R$ {(item.preco_unitario || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
-                                              <td className={`py-3 px-3 text-right font-mono font-bold ${t.textPrimary}`}>R$ {((qtdExibir || 0) * (item.preco_unitario || 0)).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                                              {ehAdmin && <td className={`py-3 px-3 text-right font-mono ${t.textAccent}`}>{formatarKg(pesoExibir)} kg</td>}
+                                              {ehAdmin && <td className={`py-3 px-3 text-right font-mono ${t.textSecondary}`}>R$ {(item.preco_unitario || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>}
+                                              {ehAdmin && <td className={`py-3 px-3 text-right font-mono font-bold ${t.textPrimary}`}>R$ {((qtdExibir || 0) * (item.preco_unitario || 0)).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>}
                                               <td className="py-3 px-3 text-center">
-                                                <select value={item.statusOF || 'Pendente'} onChange={(e) => alternarStatusOf(pedido.id, item.id_numof, e.target.value)} className={`text-[10px] font-bold rounded-full px-2.5 py-1.5 border cursor-pointer focus:outline-none ${obterEstiloStatusCompleto(item.statusOF)}`}>
+                                                <select value={item.statusOF || 'Pendente'} onChange={(e) => alternarStatusOf(pedido.id, item.id_numof, e.target.value)} disabled={!ehAdmin} className={`text-[10px] font-bold rounded-full px-2.5 py-1.5 border cursor-pointer focus:outline-none ${obterEstiloStatusCompleto(item.statusOF)}`}>
                                                   <option value="Pendente" className={`${t.card} text-amber-500`}>Pendente</option>
                                                   <option value="Compras" className={`${t.card} text-sky-500`}>{item.id_compra && item.statusOF === 'Compras' ? `Compras (OC: ${item.id_compra})` : 'Compras'}</option>
                                                   <option value="Produção" className={`${t.card} text-purple-500`}>Produção</option>
@@ -1880,16 +1913,16 @@ function App() {
                                 </div>
                                 <div className="flex-shrink-0 flex flex-col items-end gap-2">
                                   {isFaturadoGeral ? <span className={`text-[11px] font-bold ${t.textSecondary}`}>ENTREGUE</span> : renderizarTagPrazo(pedido.dias_restantes, pedido.data_entrega)}
-                                  {!isFaturadoGeral && (
+                                  {ehAdmin && !isFaturadoGeral && (
                                     <button onClick={(e) => { e.stopPropagation(); alterarStatusPedido(pedido.id, 'Faturada'); }} className={`text-[9px] uppercase tracking-wider font-bold bg-[#5DD62C] hover:bg-[#337418] text-[#0F0F0F] hover:text-[#F8F8F8] px-2 py-1 rounded shadow-sm transition-all`}>
                                       Forçar Baixa
                                     </button>
                                   )}
                                 </div>
                               </div>
-                              <div className={`my-4 py-3 border-y ${t.border} grid ${isFaturadoGeral ? 'grid-cols-2' : 'grid-cols-3'} gap-2 text-center text-xs`}>
+                              <div className={`my-4 py-3 border-y ${t.border} grid ${['grid-cols-1', 'grid-cols-2', 'grid-cols-3'][(isFaturadoGeral ? 0 : 1) + (ehAdmin ? 1 : 0)]} gap-2 text-center text-xs`}>
                                 {!isFaturadoGeral && <div><span className={`block text-[10px] ${t.textSecondary} uppercase tracking-wider mb-1`}>Itens Ativos</span><span className={`font-mono font-bold ${t.textPrimary}`}>{pedido.total_itens_abertos || 0}</span></div>}
-                                <div><span className={`block text-[10px] ${t.textSecondary} uppercase tracking-wider mb-1`}>{isFaturadoGeral ? 'Peso Faturado' : 'Peso Faltante'}</span><span className={`font-mono font-bold ${isFaturadoGeral ? t.textSecondary : t.textAccent}`}>{formatarKg(pedido.peso_total_kg)} kg</span></div>
+                                {ehAdmin && <div><span className={`block text-[10px] ${t.textSecondary} uppercase tracking-wider mb-1`}>{isFaturadoGeral ? 'Peso Faturado' : 'Peso Faltante'}</span><span className={`font-mono font-bold ${isFaturadoGeral ? t.textSecondary : t.textAccent}`}>{formatarKg(pedido.peso_total_kg)} kg</span></div>}
                                 <div><span className={`block text-[10px] ${t.textSecondary} uppercase tracking-wider mb-1`}>Emissão</span><span className={`font-mono ${t.textPrimary}`}>{pedido.data_emissao || '-'}</span></div>
                               </div>
                             </div>
@@ -1918,9 +1951,9 @@ function App() {
                                           <div className={`font-bold ${t.textPrimary} truncate`}>{item.referencia || item.id_produto}</div>
                                           <div className={`flex justify-between items-center text-[11px] ${t.textSecondary}`}>
                                             <span>Qtd Restante: <span className={t.textPrimary}>{Number(qtdExibir).toLocaleString('pt-BR')} / {Number(item.qtd_prog).toLocaleString('pt-BR')}</span></span>
-                                            <span className={`${t.textAccent} font-mono font-bold`}>{formatarKg(pesoExibir)} kg</span>
+                                            {ehAdmin && <span className={`${t.textAccent} font-mono font-bold`}>{formatarKg(pesoExibir)} kg</span>}
                                           </div>
-                                          <select value={item.statusOF || 'Pendente'} onChange={(e) => alternarStatusOf(pedido.id, item.id_numof, e.target.value)} className={`w-full py-2 md:py-1.5 mt-1 rounded-md text-[11px] md:text-[10px] font-bold border transition-all cursor-pointer focus:outline-none ${obterEstiloStatusCompleto(item.statusOF)}`}>
+                                          <select value={item.statusOF || 'Pendente'} onChange={(e) => alternarStatusOf(pedido.id, item.id_numof, e.target.value)} disabled={!ehAdmin} className={`w-full py-2 md:py-1.5 mt-1 rounded-md text-[11px] md:text-[10px] font-bold border transition-all cursor-pointer focus:outline-none ${obterEstiloStatusCompleto(item.statusOF)}`}>
                                             <option value="Pendente" className={`${t.card} text-amber-500`}>Pendente</option>
                                             <option value="Compras" className={`${t.card} text-sky-500`}>{item.id_compra && item.statusOF === 'Compras' ? `Compras (OC: ${item.id_compra})` : 'Compras'}</option>
                                             <option value="Produção" className={`${t.card} text-purple-500`}>Produção</option>
@@ -2501,9 +2534,9 @@ function App() {
                                   <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" /></svg>
                                 </a>
                               )}
-                              <button onClick={() => ocultarClienteComercial(c.id_cliente)} title="Ocultar Cliente (Ignorar)" className="inline-block p-1.5 bg-gray-500/10 text-gray-500 rounded hover:bg-gray-500 hover:text-white transition-colors">
+                              {ehAdmin && <button onClick={() => ocultarClienteComercial(c.id_cliente)} title="Ocultar Cliente (Ignorar)" className="inline-block p-1.5 bg-gray-500/10 text-gray-500 rounded hover:bg-gray-500 hover:text-white transition-colors">
                                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l3.59 3.59m0 0A9.953 9.953 0 0112 5c4.478 0 8.268 2.943 9.543 7a10.025 10.025 0 01-4.132 5.411m0 0L21 21" /></svg>
-                              </button>
+                              </button>}
                             </td>
                           </tr>
                         );

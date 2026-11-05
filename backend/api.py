@@ -1,18 +1,23 @@
 import os
 import re
 import json
+import logging
 import sqlite3
 import traceback
 import threading
 import time
 from datetime import date, datetime, timedelta
+from logging.handlers import RotatingFileHandler
 import requests
 # pyrefly: ignore [missing-import]
 from dotenv import load_dotenv
 # pyrefly: ignore [missing-import]
 import fdb
-from flask import Flask, jsonify, request, send_from_directory
+from flask import Flask, g, jsonify, request, send_from_directory
 from flask_cors import CORS
+from werkzeug.exceptions import HTTPException
+
+import auth
 
 # --- CARREGA O CAMINHO ABSOLUTO DA DLL E SUAS DEPENDÊNCIAS ---
 BASE_DIR = os.path.abspath(os.path.dirname(__file__))
@@ -34,7 +39,114 @@ dist_local = os.path.join(BASE_DIR, "dist")
 dist_dev = os.path.abspath(os.path.join(BASE_DIR, "..", "frontend", "dist"))
 FRONTEND_DIST = dist_local if os.path.exists(dist_local) else dist_dev
 app = Flask(__name__, static_folder=FRONTEND_DIST, static_url_path="")
-CORS(app)
+
+# CORS: só origens da rede local (IP privado ou nome do computador) ou as listadas em CORS_ORIGINS.
+ORIGENS_LAN = re.compile(
+    r"^https?://(localhost|127\.0\.0\.1|10\.\d+\.\d+\.\d+|192\.168\.\d+\.\d+"
+    r"|172\.(1[6-9]|2\d|3[01])\.\d+\.\d+|[A-Za-z0-9-]+)(:\d+)?$"
+)
+_origens_env = [o.strip() for o in os.getenv("CORS_ORIGINS", "").split(",") if o.strip()]
+CORS(app, origins=_origens_env or [ORIGENS_LAN])
+
+# Erros completos vão para backend/logs/fivel.log; o navegador recebe só uma mensagem genérica.
+os.makedirs(os.path.join(BASE_DIR, "logs"), exist_ok=True)
+logger = logging.getLogger("fivel")
+logger.setLevel(logging.INFO)
+_log_handler = RotatingFileHandler(
+    os.path.join(BASE_DIR, "logs", "fivel.log"), maxBytes=2_000_000, backupCount=5, encoding="utf-8"
+)
+_log_handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
+logger.addHandler(_log_handler)
+
+
+def erro_interno(e):
+    logger.error("Erro em %s %s", request.method, request.path, exc_info=e)
+    return jsonify({"erro": "Erro interno no servidor. O detalhe foi registrado no log."}), 500
+
+
+# --- LOGIN E PERMISSÕES ---
+auth.init_tabelas()
+
+# Perfil Vendas: só consulta Pedidos, Produção, Orçamentos e Comercial, sem valores nem pesos.
+ENDPOINTS_VENDAS = {"obter_pedidos", "obter_orcamentos", "obter_recorrencia_comercial", "auth_eu", "logout"}
+CAMPOS_OCULTOS_VENDAS = {
+    "peso_total_kg", "peso_total_pedido_bruto", "faturamento_total",
+    "peso_of", "peso_restante", "preco_unitario",
+    "total_geral", "total_peso", "vl_unit", "vl_tot",
+}
+
+
+def _token_da_requisicao():
+    cabecalho = request.headers.get("Authorization", "")
+    return cabecalho[7:].strip() if cabecalho.startswith("Bearer ") else ""
+
+
+def ocultar_valores(dados):
+    if isinstance(dados, list):
+        return [ocultar_valores(d) for d in dados]
+    if isinstance(dados, dict):
+        return {k: ocultar_valores(v) for k, v in dados.items() if k not in CAMPOS_OCULTOS_VENDAS}
+    return dados
+
+
+@app.before_request
+def exigir_login():
+    if request.method == "OPTIONS" or not request.path.startswith("/api/") or request.endpoint == "login":
+        return None
+    usuario = auth.usuario_da_sessao(_token_da_requisicao())
+    if not usuario:
+        return jsonify({"erro": "Sessão expirada. Faça login novamente."}), 401
+    g.usuario = usuario
+    if usuario["perfil"] != "admin" and request.endpoint not in ENDPOINTS_VENDAS:
+        return jsonify({"erro": "Seu perfil não tem permissão para esta ação."}), 403
+    return None
+
+
+@app.after_request
+def pos_requisicao(resposta):
+    usuario = g.get("usuario")
+    if not usuario:
+        return resposta
+    # Os valores saem no servidor: esconder só na tela não impede ver pelo navegador (F12).
+    if usuario["perfil"] == "vendas" and resposta.is_json:
+        resposta.set_data(app.json.dumps(ocultar_valores(resposta.get_json())))
+    # Auditoria: quem fez cada alteração bem-sucedida.
+    if request.method in ("POST", "PUT", "DELETE") and resposta.status_code < 400 and request.endpoint != "logout":
+        try:
+            auth.registrar_auditoria(usuario["login"], f"{request.method} {request.path}", request.get_json(silent=True))
+        except Exception as e:
+            logger.error("Falha ao registrar auditoria", exc_info=e)
+    return resposta
+
+
+@app.errorhandler(Exception)
+def tratar_erro_nao_previsto(e):
+    if isinstance(e, HTTPException):
+        return e
+    return erro_interno(e)
+
+
+@app.route("/api/auth/login", methods=["POST"])
+def login():
+    dados = request.get_json(silent=True) or {}
+    token, usuario, erro = auth.autenticar(dados.get("login"), dados.get("senha"))
+    if erro:
+        auth.registrar_auditoria(str(dados.get("login") or "")[:100], "login_falhou", {"ip": request.remote_addr})
+        return jsonify({"erro": erro}), 401
+    auth.registrar_auditoria(usuario["login"], "login", {"ip": request.remote_addr})
+    return jsonify({"token": token, "usuario": {k: usuario[k] for k in ("nome", "login", "perfil")}}), 200
+
+
+@app.route("/api/auth/eu", methods=["GET"])
+def auth_eu():
+    return jsonify({"usuario": {k: g.usuario[k] for k in ("nome", "login", "perfil")}}), 200
+
+
+@app.route("/api/auth/logout", methods=["POST"])
+def logout():
+    auth.encerrar_sessao(_token_da_requisicao())
+    auth.registrar_auditoria(g.usuario["login"], "logout")
+    return jsonify({"sucesso": True}), 200
 
 
 # --- PARÂMETROS DE NEGÓCIO ---
@@ -724,7 +836,7 @@ def obter_pedidos():
         return jsonify(lista_pedidos), 200
     except Exception as e:
         traceback.print_exc()
-        return jsonify({"erro": str(e)}), 500
+        return erro_interno(e)
 
 
 def mes_anterior(ano, mes):
@@ -881,7 +993,7 @@ def obter_calendario_pesos():
 
     except Exception as e:
         traceback.print_exc()
-        return jsonify({"erro": str(e)}), 500
+        return erro_interno(e)
     finally:
         if conn and not conn.closed:
             conn.close()
@@ -982,7 +1094,7 @@ def obter_orcamentos():
         return jsonify(list(orc_map.values())), 200
     except Exception as e:
         traceback.print_exc()
-        return jsonify({"erro": str(e)}), 500
+        return erro_interno(e)
     finally:
         if conn:
             conn.close()
@@ -1013,7 +1125,7 @@ def atualizar_nota_orcamento(id_orcamento):
         return jsonify({"mensagem": "Nota atualizada", "data_atualizacao": agora}), 200
     except Exception as e:
         traceback.print_exc()
-        return jsonify({"erro": str(e)}), 500
+        return erro_interno(e)
 
 @app.route("/api/orcamentos/<id_orcamento>/status", methods=["PUT"])
 def atualizar_status_orcamento(id_orcamento):
@@ -1041,7 +1153,7 @@ def atualizar_status_orcamento(id_orcamento):
         return jsonify({"mensagem": "Status atualizado", "novo_status": novo_status}), 200
     except Exception as e:
         traceback.print_exc()
-        return jsonify({"erro": str(e)}), 500
+        return erro_interno(e)
 
 
 @app.route("/api/compras", methods=["GET"])
@@ -1147,7 +1259,7 @@ def obter_compras():
 
         return jsonify(list(compras_map.values())), 200
     except Exception as e:
-        return jsonify({"erro": str(e)}), 500
+        return erro_interno(e)
     finally:
         if conn:
             conn.close()
@@ -1202,7 +1314,7 @@ def dar_baixa_compra(id_compra):
     except Exception as e:
         if conn:
             conn.rollback()
-        return jsonify({"erro": str(e)}), 500
+        return erro_interno(e)
     finally:
         if conn:
             conn.close()
@@ -1227,7 +1339,7 @@ def atualizar_status_unidade(id_pedido):
         safe_update_status("pedidos", id_pedido, novo_status)
         return jsonify({"sucesso": True}), 200
     except Exception as e:
-        return jsonify({"erro": str(e)}), 500
+        return erro_interno(e)
 
 
 @app.route("/api/pedidos/<int:id_pedido>/itens/<path:id_of>/status", methods=["PUT"])
@@ -1245,7 +1357,7 @@ def atualizar_status_of(id_pedido, id_of):
         safe_update_status("ofs", id_of, novo_status, qtd_val)
         return jsonify({"sucesso": True}), 200
     except Exception as e:
-        return jsonify({"erro": str(e)}), 500
+        return erro_interno(e)
 
 
 @app.route("/api/ofs/status-rapido", methods=["PUT"])
@@ -1283,7 +1395,7 @@ def atualizar_status_rapido_of():
         safe_update_status("ofs", id_of, novo_status, qtd_val)
         return jsonify({"sucesso": True}), 200
     except Exception as e:
-        return jsonify({"erro": str(e)}), 500
+        return erro_interno(e)
     finally:
         if conn:
             conn.close()
@@ -1301,7 +1413,7 @@ def atualizar_status_lote():
         safe_update_status_lote("pedidos", {str(i): novo_status for i in ids})
         return jsonify({"sucesso": True}), 200
     except Exception as e:
-        return jsonify({"erro": str(e)}), 500
+        return erro_interno(e)
 
 
 @app.route("/api/resumo/mapa", methods=["GET"])
@@ -1339,7 +1451,7 @@ def obter_resumo_mapa():
             200,
         )
     except Exception as e:
-        return jsonify({"erro": str(e)}), 500
+        return erro_interno(e)
     finally:
         if conn:
             conn.close()
@@ -1463,7 +1575,7 @@ def obter_resumo_dashboard():
             200,
         )
     except Exception as e:
-        return jsonify({"erro": str(e)}), 500
+        return erro_interno(e)
     finally:
         if conn:
             conn.close()
@@ -1504,7 +1616,7 @@ def obter_ft(id_ft):
             
     except Exception as e:
         traceback.print_exc()
-        return jsonify({"erro": str(e)}), 500
+        return erro_interno(e)
     finally:
         if conn:
             conn.close()
@@ -1557,7 +1669,7 @@ def gerenciar_estoque():
             return jsonify({"sucesso": True, "acao": "inserido"}), 201
         except Exception as e:
             traceback.print_exc()
-            return jsonify({"erro": str(e)}), 500
+            return erro_interno(e)
 
     # Caso seja GET, retorna o estoque
     try:
@@ -1589,7 +1701,7 @@ def gerenciar_estoque():
         return jsonify(estoque_formatado), 200
     except Exception as e:
         traceback.print_exc()
-        return jsonify({"erro": str(e)}), 500
+        return erro_interno(e)
 
 @app.route("/api/estoque/<int:id_estoque>", methods=["PUT"])
 def editar_estoque(id_estoque):
@@ -1630,7 +1742,7 @@ def editar_estoque(id_estoque):
         return jsonify({"sucesso": True}), 200
     except Exception as e:
         traceback.print_exc()
-        return jsonify({"erro": str(e)}), 500
+        return erro_interno(e)
 
 
 @app.route("/api/estoque/<int:id_estoque>", methods=["DELETE"])
@@ -1645,7 +1757,7 @@ def deletar_estoque(id_estoque):
         return jsonify({"sucesso": True}), 200
     except Exception as e:
         traceback.print_exc()
-        return jsonify({"erro": str(e)}), 500
+        return erro_interno(e)
 
 
 def _normalizar_endereco(endereco):
@@ -1757,7 +1869,7 @@ def geocode_cliente():
         return jsonify({"erro": "Nao foi possivel geolocalizar o endereco"}), 500
     except Exception as e:
         traceback.print_exc()
-        return jsonify({"erro": str(e)}), 500
+        return erro_interno(e)
 
 
 def decode_polyline(polyline_str):
@@ -1912,7 +2024,7 @@ def optimize_route():
             
     except Exception as e:
         traceback.print_exc()
-        return jsonify({"erro": str(e)}), 500
+        return erro_interno(e)
 
 @app.route("/api/comercial/clientes/<id_cliente>/ignorar", methods=["POST"])
 def ignorar_cliente_comercial(id_cliente):
@@ -1933,7 +2045,7 @@ def ignorar_cliente_comercial(id_cliente):
         return jsonify({"sucesso": True, "ignorado": ignorar}), 200
     except Exception as e:
         traceback.print_exc()
-        return jsonify({"erro": str(e)}), 500
+        return erro_interno(e)
 
 @app.route("/api/comercial/recorrencia", methods=["GET"])
 def obter_recorrencia_comercial():
@@ -2081,7 +2193,7 @@ def obter_recorrencia_comercial():
         }), 200
     except Exception as e:
         traceback.print_exc()
-        return jsonify({"erro": str(e)}), 500
+        return erro_interno(e)
     finally:
         if conn:
             conn.close()
@@ -2089,6 +2201,8 @@ def obter_recorrencia_comercial():
 @app.route("/", defaults={"path": ""})
 @app.route("/<path:path>")
 def serve_frontend(path):
+    if path.startswith("api/"):
+        return jsonify({"erro": "Rota não encontrada."}), 404
     if path != "" and os.path.exists(os.path.join(app.static_folder, path)):
         return send_from_directory(app.static_folder, path)
     if os.path.exists(os.path.join(app.static_folder, "index.html")):

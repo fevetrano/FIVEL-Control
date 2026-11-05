@@ -1,0 +1,16 @@
+# Segredos (os modelos sem valores ficam em .env.example)
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.pyc
+
+# Dados e logs locais do backend
+backend/logs/
+*.db-wal
+*.db-shm
+
+# Cópias de trabalho do git
+.worktrees/
