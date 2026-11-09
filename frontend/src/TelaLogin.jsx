@@ -39,7 +39,7 @@ export default function TelaLogin({ onEntrar }) {
 
         <label className="block">
           <span className="block text-[11px] font-bold uppercase tracking-wider text-[#A0A0A0] mb-1.5">Usuário</span>
-          <input autoFocus autoComplete="username" value={login} onChange={(e) => setLogin(e.target.value)} className={campo} />
+          <input autoFocus autoComplete="username" autoCapitalize="characters" value={login} onChange={(e) => setLogin(e.target.value.toUpperCase())} className={`${campo} uppercase`} />
         </label>
 
         <label className="block">

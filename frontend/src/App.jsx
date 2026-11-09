@@ -68,7 +68,9 @@ function MapPolyline({ positions, color, weight }) {
 }
 
 function App({ usuario, onSair }) {
-  const ehAdmin = usuario?.perfil === 'admin';
+  // Dev e Admin usam tudo; só o Dev cadastra usuários.
+  const ehAdmin = ['dev', 'admin'].includes(usuario?.perfil);
+  const ehDev = usuario?.perfil === 'dev';
   const [isDarkMode, setIsDarkMode] = useState(true);
   const [pedidos, setPedidos] = useState([])
   const [orcamentos, setOrcamentos] = useState([])
@@ -1035,7 +1037,7 @@ function App({ usuario, onSair }) {
 
           <div className={`flex items-center justify-between sm:justify-center gap-3 ${t.card} pl-4 pr-1.5 py-1.5 rounded-xl border ${t.border} shadow-sm w-full sm:w-auto`}>
             <span className={`text-xs font-bold ${t.textPrimary} truncate max-w-[160px]`} title={usuario?.login}>{usuario?.nome}</span>
-            {ehAdmin && <button onClick={() => setModalUsuariosAberto(true)} className={`px-3 py-2 sm:py-1 rounded-lg text-xs font-bold ${t.textSecondary} hover:text-[#5DD62C] border ${t.border} transition-colors`}>Usuários</button>}
+            {ehDev && <button onClick={() => setModalUsuariosAberto(true)} className={`px-3 py-2 sm:py-1 rounded-lg text-xs font-bold ${t.textSecondary} hover:text-[#5DD62C] border ${t.border} transition-colors`}>Usuários</button>}
             <button onClick={onSair} className={`px-3 py-2 sm:py-1 rounded-lg text-xs font-bold ${t.textSecondary} hover:text-red-400 border ${t.border} transition-colors`}>Sair</button>
           </div>
         </div>

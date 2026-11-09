@@ -3,7 +3,7 @@ import axios from 'axios'
 import { API_URL } from './api.js'
 
 const FORM_VAZIO = { nome: '', login: '', senha: '', perfil: 'vendas' };
-const NOME_PERFIL = { admin: 'Admin', vendas: 'Vendas' };
+const NOME_PERFIL = { dev: 'Dev', admin: 'Admin', vendas: 'Vendas' };
 
 export default function GerenciarUsuarios({ t, usuarioAtual, onFechar }) {
   const [usuarios, setUsuarios] = useState([]);
@@ -26,7 +26,7 @@ export default function GerenciarUsuarios({ t, usuarioAtual, onFechar }) {
     setSalvando(true);
     try {
       await axios.post(`${API_URL}/api/usuarios`, form);
-      setMensagem({ texto: `Usuário "${form.login.trim().toLowerCase()}" criado.`, tipo: 'ok' });
+      setMensagem({ texto: `Usuário "${form.login.trim()}" criado.`, tipo: 'ok' });
       setForm(FORM_VAZIO);
       carregar();
     } catch (err) {
@@ -38,13 +38,23 @@ export default function GerenciarUsuarios({ t, usuarioAtual, onFechar }) {
 
   const trocarSenha = async (login) => {
     const proprio = login === usuarioAtual?.login;
-    const senha = window.prompt(`Nova senha para "${login}" (mínimo 8 caracteres)${proprio ? '\nVocê precisará entrar de novo.' : ''}`);
+    const senha = window.prompt(`Nova senha para "${login}" (mínimo 4 caracteres)${proprio ? '\nVocê precisará entrar de novo.' : ''}`);
     if (!senha) return;
     try {
       await axios.put(`${API_URL}/api/usuarios/${encodeURIComponent(login)}`, { senha });
       setMensagem({ texto: `Senha de "${login}" alterada.`, tipo: 'ok' });
     } catch (err) {
       mostrarErro(err, 'Erro ao trocar a senha.');
+    }
+  };
+
+  const mudarPerfil = async (u, perfil) => {
+    if (!window.confirm(`Mudar "${u.login}" para o perfil ${NOME_PERFIL[perfil]}? Ele precisará entrar de novo.`)) return;
+    try {
+      await axios.put(`${API_URL}/api/usuarios/${encodeURIComponent(u.login)}`, { perfil });
+      carregar();
+    } catch (err) {
+      mostrarErro(err, 'Erro ao mudar o perfil.');
     }
   };
 
@@ -80,7 +90,12 @@ export default function GerenciarUsuarios({ t, usuarioAtual, onFechar }) {
                 <div className={`font-bold text-sm ${t.textPrimary} truncate`}>{u.nome}</div>
                 <div className={`text-[11px] font-mono ${t.textSecondary}`}>{u.login} · {NOME_PERFIL[u.perfil] || u.perfil}{u.ativo ? '' : ' · desativado'}</div>
               </div>
-              <div className="flex gap-2">
+              <div className="flex flex-wrap gap-2">
+                {u.login !== usuarioAtual?.login && (
+                  <select value={u.perfil} onChange={(e) => mudarPerfil(u, e.target.value)} className={`${t.inner} ${t.textPrimary} border ${t.border} rounded-lg px-2 py-1.5 text-[11px] font-bold focus:outline-none`}>
+                    {Object.entries(NOME_PERFIL).map(([valor, nome]) => <option key={valor} value={valor}>{nome}</option>)}
+                  </select>
+                )}
                 <button onClick={() => trocarSenha(u.login)} className={`px-3 py-1.5 rounded-lg text-[11px] font-bold ${t.textSecondary} border ${t.border} hover:border-[#5DD62C]`}>Trocar senha</button>
                 {u.login !== usuarioAtual?.login && (
                   <button onClick={() => alternarAtivo(u)} className={`px-3 py-1.5 rounded-lg text-[11px] font-bold border ${u.ativo ? 'text-red-400 border-red-500/30' : 'text-[#5DD62C] border-[#5DD62C]/30'}`}>{u.ativo ? 'Desativar' : 'Reativar'}</button>
@@ -95,12 +110,13 @@ export default function GerenciarUsuarios({ t, usuarioAtual, onFechar }) {
           <h3 className={`text-sm font-bold ${t.textPrimary}`}>Novo usuário</h3>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <label><span className={rotulo}>Nome</span><input value={form.nome} onChange={(e) => setForm({ ...form, nome: e.target.value })} className={campo} /></label>
-            <label><span className={rotulo}>Login</span><input value={form.login} autoComplete="off" onChange={(e) => setForm({ ...form, login: e.target.value })} className={campo} /></label>
-            <label><span className={rotulo}>Senha (mín. 8)</span><input type="password" autoComplete="new-password" value={form.senha} onChange={(e) => setForm({ ...form, senha: e.target.value })} className={campo} /></label>
+            <label><span className={rotulo}>Login</span><input value={form.login} autoComplete="off" autoCapitalize="characters" onChange={(e) => setForm({ ...form, login: e.target.value.toUpperCase() })} className={`${campo} uppercase`} /></label>
+            <label><span className={rotulo}>Senha (mín. 4)</span><input type="password" autoComplete="new-password" value={form.senha} onChange={(e) => setForm({ ...form, senha: e.target.value })} className={campo} /></label>
             <label><span className={rotulo}>Perfil</span>
               <select value={form.perfil} onChange={(e) => setForm({ ...form, perfil: e.target.value })} className={campo}>
                 <option value="vendas">Vendas</option>
                 <option value="admin">Admin</option>
+                <option value="dev">Dev</option>
               </select>
             </label>
           </div>

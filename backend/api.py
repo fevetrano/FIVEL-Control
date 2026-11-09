@@ -74,6 +74,8 @@ ENDPOINTS_VENDAS = {
     "atualizar_status_unidade", "atualizar_status_of",
     "atualizar_nota_orcamento", "atualizar_status_orcamento", "ignorar_cliente_comercial",
 }
+# Cadastro de usuários: só o perfil Dev.
+ENDPOINTS_DEV = {"listar_usuarios", "criar_usuario", "atualizar_usuario"}
 CAMPOS_OCULTOS_VENDAS = {
     "peso_total_kg", "peso_total_pedido_bruto", "faturamento_total",
     "peso_of", "peso_restante", "preco_unitario", "peso_faturado_kg",
@@ -102,7 +104,14 @@ def exigir_login():
     if not usuario:
         return jsonify({"erro": "Sessão expirada. Faça login novamente."}), 401
     g.usuario = usuario
-    if usuario["perfil"] != "admin" and request.endpoint not in ENDPOINTS_VENDAS:
+    perfil = usuario["perfil"]
+    if request.endpoint in ENDPOINTS_DEV:
+        permitido = perfil == "dev"
+    elif perfil in ("dev", "admin"):
+        permitido = True
+    else:
+        permitido = request.endpoint in ENDPOINTS_VENDAS
+    if not permitido:
         return jsonify({"erro": "Seu perfil não tem permissão para esta ação."}), 403
     return None
 
@@ -157,7 +166,7 @@ def logout():
     return jsonify({"sucesso": True}), 200
 
 
-# Cadastro de usuários (só Admin: estas rotas não estão em ENDPOINTS_VENDAS).
+# Cadastro de usuários (só Dev: ver ENDPOINTS_DEV).
 @app.route("/api/usuarios", methods=["GET"])
 def listar_usuarios():
     return jsonify(auth.listar_usuarios()), 200
@@ -176,11 +185,14 @@ def criar_usuario():
 @app.route("/api/usuarios/<login>", methods=["PUT"])
 def atualizar_usuario(login):
     dados = request.get_json(silent=True) or {}
-    if login.strip().lower() == g.usuario["login"] and dados.get("ativo") is False:
-        return jsonify({"erro": "Você não pode desativar o seu próprio usuário."}), 400
+    proprio = auth.normalizar_login(login) == g.usuario["login"]
+    if proprio and (dados.get("ativo") is False or ("perfil" in dados and dados["perfil"] != "dev")):
+        return jsonify({"erro": "Você não pode desativar nem rebaixar o seu próprio usuário."}), 400
     try:
         if dados.get("senha"):
             auth.alterar_senha(login, dados["senha"])
+        if "perfil" in dados:
+            auth.definir_perfil(login, dados["perfil"])
         if "ativo" in dados:
             auth.definir_ativo(login, bool(dados["ativo"]))
     except ValueError as e:

@@ -1,14 +1,15 @@
 """Cadastro de usuários do FIVEL Control pelo terminal.
 
-Exemplos (rodar dentro da pasta backend):
-    python gerenciar_usuarios.py criar --nome "Fernando" --login fernando --perfil admin
-    python gerenciar_usuarios.py criar --nome "Escritório" --login escritorio --perfil vendas
-    python gerenciar_usuarios.py senha --login escritorio
-    python gerenciar_usuarios.py desativar --login escritorio
-    python gerenciar_usuarios.py ativar --login escritorio
+Normalmente o cadastro é feito pela tela (botão "Usuários", perfil Dev). Pelo terminal,
+dentro da pasta do backend:
+    python gerenciar_usuarios.py criar --nome "Fernando" --login FERNANDO --perfil dev
+    python gerenciar_usuarios.py criar --nome "Escritório" --login ESCRITORIO --perfil vendas
+    python gerenciar_usuarios.py senha --login ESCRITORIO
+    python gerenciar_usuarios.py desativar --login ESCRITORIO
+    python gerenciar_usuarios.py ativar --login ESCRITORIO
     python gerenciar_usuarios.py listar
 
-A senha é pedida sem aparecer na tela.
+O login é sempre gravado em maiúsculas. A senha é pedida sem aparecer na tela.
 """
 import argparse
 import getpass

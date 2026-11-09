@@ -13,9 +13,10 @@ from werkzeug.security import check_password_hash, generate_password_hash
 BASE_DIR = os.path.abspath(os.path.dirname(__file__))
 SQLITE_DB = os.path.join(BASE_DIR, "kanban_status.db")
 
-PERFIS = ("admin", "vendas")
+# dev: tudo, inclusive cadastro de usuários | admin: tudo, menos usuários | vendas: abas comerciais.
+PERFIS = ("dev", "admin", "vendas")
 DURACAO_SESSAO = timedelta(hours=12)
-SENHA_MINIMA = 8
+SENHA_MINIMA = 4
 
 # Proteção contra tentativa de senha em sequência: 5 erros bloqueiam o login por 5 minutos.
 MAX_TENTATIVAS = 5
@@ -38,6 +39,11 @@ def _agora():
 
 def _hash_token(token):
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def normalizar_login(login):
+    """Login é sempre em maiúsculas, para não haver diferença ao digitar."""
+    return (login or "").strip().upper()
 
 
 def init_tabelas():
@@ -71,6 +77,11 @@ def init_tabelas():
             detalhes TEXT
         )
     """)
+    # Logins criados antes da regra das maiúsculas.
+    try:
+        conn.execute("UPDATE usuarios SET login = UPPER(login) WHERE login <> UPPER(login)")
+    except sqlite3.IntegrityError:
+        pass
     conn.commit()
     conn.close()
 
@@ -80,12 +91,16 @@ def _validar_senha(senha):
         raise ValueError(f"A senha precisa ter pelo menos {SENHA_MINIMA} caracteres.")
 
 
-def criar_usuario(nome, login, senha, perfil):
-    login = (login or "").strip().lower()
-    if not login or not (nome or "").strip():
-        raise ValueError("Nome e login são obrigatórios.")
+def _validar_perfil(perfil):
     if perfil not in PERFIS:
         raise ValueError(f"Perfil inválido. Use: {', '.join(PERFIS)}.")
+
+
+def criar_usuario(nome, login, senha, perfil):
+    login = normalizar_login(login)
+    if not login or not (nome or "").strip():
+        raise ValueError("Nome e login são obrigatórios.")
+    _validar_perfil(perfil)
     _validar_senha(senha)
     conn = _conn()
     try:
@@ -100,18 +115,19 @@ def criar_usuario(nome, login, senha, perfil):
         conn.close()
 
 
+def _encerrar_sessoes_do_usuario(conn, login):
+    conn.execute("DELETE FROM sessoes WHERE usuario_id = (SELECT id FROM usuarios WHERE login = ?)", (login,))
+
+
 def alterar_senha(login, senha):
     _validar_senha(senha)
+    login = normalizar_login(login)
     conn = _conn()
     cur = conn.execute(
-        "UPDATE usuarios SET senha_hash = ? WHERE login = ?",
-        (generate_password_hash(senha), (login or "").strip().lower()),
+        "UPDATE usuarios SET senha_hash = ? WHERE login = ?", (generate_password_hash(senha), login)
     )
     # Senha nova derruba as sessões abertas com a senha antiga.
-    conn.execute(
-        "DELETE FROM sessoes WHERE usuario_id = (SELECT id FROM usuarios WHERE login = ?)",
-        ((login or "").strip().lower(),),
-    )
+    _encerrar_sessoes_do_usuario(conn, login)
     conn.commit()
     conn.close()
     if cur.rowcount == 0:
@@ -119,15 +135,24 @@ def alterar_senha(login, senha):
 
 
 def definir_ativo(login, ativo):
+    login = normalizar_login(login)
     conn = _conn()
-    cur = conn.execute(
-        "UPDATE usuarios SET ativo = ? WHERE login = ?", (1 if ativo else 0, (login or "").strip().lower())
-    )
+    cur = conn.execute("UPDATE usuarios SET ativo = ? WHERE login = ?", (1 if ativo else 0, login))
     if not ativo:
-        conn.execute(
-            "DELETE FROM sessoes WHERE usuario_id = (SELECT id FROM usuarios WHERE login = ?)",
-            ((login or "").strip().lower(),),
-        )
+        _encerrar_sessoes_do_usuario(conn, login)
+    conn.commit()
+    conn.close()
+    if cur.rowcount == 0:
+        raise ValueError(f"Usuário '{login}' não encontrado.")
+
+
+def definir_perfil(login, perfil):
+    _validar_perfil(perfil)
+    login = normalizar_login(login)
+    conn = _conn()
+    cur = conn.execute("UPDATE usuarios SET perfil = ? WHERE login = ?", (perfil, login))
+    # As permissões novas valem a partir do próximo login.
+    _encerrar_sessoes_do_usuario(conn, login)
     conn.commit()
     conn.close()
     if cur.rowcount == 0:
@@ -163,7 +188,7 @@ def _registrar_falha(login):
 
 def autenticar(login, senha):
     """Retorna (token, usuario, erro). Em caso de erro, token e usuario são None."""
-    login = (login or "").strip().lower()
+    login = normalizar_login(login)
     if _bloqueado(login):
         return None, None, "Muitas tentativas erradas. Aguarde 5 minutos e tente de novo."
 
