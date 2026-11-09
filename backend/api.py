@@ -70,13 +70,13 @@ auth.init_tabelas()
 # Perfil Vendas: Pedidos, Produção, Orçamentos e Comercial (pode alterar), sem pesos nem valores
 # dos pedidos. Nos orçamentos vê o preço, mas não o peso.
 ENDPOINTS_VENDAS = {
-    "obter_pedidos", "obter_orcamentos", "obter_recorrencia_comercial", "auth_eu", "logout",
+    "obter_pedidos", "obter_pedidos_faturados", "obter_orcamentos", "obter_recorrencia_comercial", "auth_eu", "logout",
     "atualizar_status_unidade", "atualizar_status_of",
     "atualizar_nota_orcamento", "atualizar_status_orcamento", "ignorar_cliente_comercial",
 }
 CAMPOS_OCULTOS_VENDAS = {
     "peso_total_kg", "peso_total_pedido_bruto", "faturamento_total",
-    "peso_of", "peso_restante", "preco_unitario",
+    "peso_of", "peso_restante", "preco_unitario", "peso_faturado_kg",
     "total_peso",
 }
 
@@ -543,16 +543,75 @@ def format_date_safe(dt):
 # --- ROTAS DA API ---
 
 
-def get_pedidos_processados(ordenar_por="id_pedido", ordem="desc"):
+_notas_cache = {}
+_notas_cache_time = 0
+CACHE_NOTAS_TTL = 30
+
+
+def obter_notas_por_pedido(cur):
+    """NFs e recibos emitidos desde o corte, por pedido:
+    {id_pedido: {"notas": [{tipo, numero, data, raw_data}], "peso_kg": float}}."""
+    global _notas_cache, _notas_cache_time
+    if _notas_cache and (time.time() - _notas_cache_time) < CACHE_NOTAS_TTL:
+        return _notas_cache
+
+    linhas = []
+    cur.execute(f"""
+        SELECT COALESCE(inf.ID_NUMPED, o.ID_NUMPED), f.NF, f.EMISSAO, SUM(inf.PESOTOTAL)
+        FROM FISCAL f
+        JOIN ITEMNF inf ON inf.NF = f.NF AND inf.ID_EMPRESA = f.ID_EMPRESA
+        LEFT JOIN ORDFAB o ON o.ID_NUMOF = inf.ID_NUMOF
+        WHERE f.EMISSAO >= '{DATA_CORTE_PEDIDOS}' AND f.ID_EMPRESA IN (1, 2)
+          AND (f.CANCELADA IS NULL OR f.CANCELADA <> 'S')
+        GROUP BY COALESCE(inf.ID_NUMPED, o.ID_NUMPED), f.NF, f.EMISSAO
+    """)
+    linhas += [("NF",) + tuple(r) for r in cur.fetchall()]
+    # Recibo (venda sem NF) não tem número de documento: o identificador é o ID_PF.
+    cur.execute(f"""
+        SELECT COALESCE(pfi.ID_NUMPED, o.ID_NUMPED), r.ID_PF, r.EMISSAO, SUM(pfi.PESOTOTAL)
+        FROM RECEBIMENTOS r
+        JOIN PFITEM pfi ON pfi.ID_PF = r.ID_PF AND pfi.ID_EMPRESA = r.ID_EMPRESA
+        LEFT JOIN ORDFAB o ON o.ID_NUMOF = pfi.ID_NUMOF
+        WHERE r.TIPOREC = 'RECIBO' AND r.EMISSAO >= '{DATA_CORTE_PEDIDOS}' AND r.ID_EMPRESA IN (1, 2)
+        GROUP BY COALESCE(pfi.ID_NUMPED, o.ID_NUMPED), r.ID_PF, r.EMISSAO
+    """)
+    linhas += [("Recibo",) + tuple(r) for r in cur.fetchall()]
+
+    notas = {}
+    for tipo, id_pedido, numero, emissao, peso in linhas:
+        if id_pedido is None or numero is None:
+            continue
+        registro = notas.setdefault(str(id_pedido), {"notas": [], "peso_kg": 0.0})
+        registro["notas"].append({
+            "tipo": tipo,
+            "numero": str(numero),
+            "data": format_date_safe(emissao),
+            "raw_data": emissao.strftime("%Y-%m-%d") if isinstance(emissao, (datetime, date)) else "",
+        })
+        registro["peso_kg"] += float(peso or 0.0)
+    for registro in notas.values():
+        registro["notas"].sort(key=lambda n: (n["raw_data"], n["numero"]))
+
+    _notas_cache = notas
+    _notas_cache_time = time.time()
+    return notas
+
+
+def get_pedidos_processados(ordenar_por="id_pedido", ordem="desc", incluir_liquidadas=False):
+    """Pedidos com suas OFs. Por padrão só OFs em aberto; com incluir_liquidadas=True traz também
+    as OFs que o Cartmaster liquidou no faturamento (usado na lista de Faturados)."""
     conn = None
     try:
         conn = get_db_connection()
         cur = conn.cursor()
 
         of_status_db = build_of_db_status_map(cur)
+        notas_por_pedido = obter_notas_por_pedido(cur)
         kanban_local = carregar_kanban_local()
         status_pedidos_local = kanban_local.get("pedidos", {})
         status_ofs_local = kanban_local.get("ofs", {})
+
+        filtro_liquidadas = "" if incluir_liquidadas else "AND (o.LIQUIDADO IS NULL OR o.LIQUIDADO <> 'S')"
 
         # Query de OFs com filtro direto da fábrica (parâmetros vêm de constantes do servidor)
         query = f"""
@@ -565,7 +624,7 @@ def get_pedidos_processados(ordenar_por="id_pedido", ordem="desc"):
                 COALESCE(NULLIF(TRIM(c.ENT_CEP), ''), c.CEP) AS CEP,
                 i.ID_PRODUTO, i.REFERENCIA, i.QUANT AS QTD_ITEM_TOTAL, i.PESO_TOT AS PESO_ITEM_TOTAL,
                 i.VLUNIT AS PRECO_UNITARIO, i.FECHA,
-                o.ID_NUMOF, o.QTDPROG AS QTD_OF_PROG, o.DTPROG AS DTPROG_OF,
+                o.ID_NUMOF, o.QTDPROG AS QTD_OF_PROG, o.DTPROG AS DTPROG_OF, o.LIQUIDADO AS OF_LIQUIDADA,
                 (
                     COALESCE((SELECT SUM(inf.QUANT) 
                      FROM ITEMNF inf 
@@ -593,7 +652,7 @@ def get_pedidos_processados(ordenar_por="id_pedido", ordem="desc"):
               AND (p.PEDIDO_BLOQUEADO IS NULL OR p.PEDIDO_BLOQUEADO <> 'S')
               AND (p.DESATIVADO IS NULL OR p.DESATIVADO <> 'S')
               AND (o.DESATIVADO IS NULL OR o.DESATIVADO <> 'S')
-              AND (o.LIQUIDADO IS NULL OR o.LIQUIDADO <> 'S')
+              {filtro_liquidadas}
               AND p.ID_NUMPED NOT IN ({SQL_PEDIDOS_EXCLUIDOS})
             ORDER BY p.ID_NUMPED DESC;
         """
@@ -678,7 +737,10 @@ def get_pedidos_processados(ordenar_por="id_pedido", ordem="desc"):
             is_faturada_total = False
             is_faturada_parcial = False
 
-            if qtd_of > 0:
+            if limpar_texto(row.get("of_liquidada")).upper() == "S":
+                # OF encerrada no Cartmaster (faturada).
+                is_faturada_total = True
+            elif qtd_of > 0:
                 if qtd_faturada_of >= (qtd_of * TOLERANCIA_FATURAMENTO):
                     is_faturada_total = True
                 elif qtd_faturada_of > 0:
@@ -819,6 +881,12 @@ def get_pedidos_processados(ordenar_por="id_pedido", ordem="desc"):
             pedido["faturamento_total"] = valor_aberto_pedido
             pedido["total_itens_abertos"] = itens_ativos_pedido
 
+            # Todas as NFs/recibos do pedido (várias em entregas parciais), da mais antiga à mais recente.
+            notas_pedido = notas_por_pedido.get(str(id_ped), {})
+            pedido["notas_fiscais"] = notas_pedido.get("notas", [])
+            pedido["peso_faturado_kg"] = notas_pedido.get("peso_kg", 0.0)
+            pedido["data_ultima_nf"] = pedido["notas_fiscais"][-1]["raw_data"] if pedido["notas_fiscais"] else ""
+
             # Alerta de Entrega Parcial
             pedido["has_entrega_parcial"] = (
                 pedido["has_faturado_of"] and pedido["has_ativa_of"]
@@ -875,6 +943,18 @@ def obter_pedidos():
         return jsonify(lista_pedidos), 200
     except Exception as e:
         traceback.print_exc()
+        return erro_interno(e)
+
+
+@app.route("/api/pedidos/faturados", methods=["GET"])
+def obter_pedidos_faturados():
+    """Pedidos faturados (inclusive os que o Cartmaster já liquidou), do faturamento mais recente
+    para o mais antigo."""
+    try:
+        lista = [p for p in get_pedidos_processados(incluir_liquidadas=True) if p["status"] == "Faturada"]
+        lista.sort(key=lambda p: (p["data_ultima_nf"] or p["raw_emissao"] or "", p["id_pedido"]), reverse=True)
+        return jsonify(lista), 200
+    except Exception as e:
         return erro_interno(e)
 
 

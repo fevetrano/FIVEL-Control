@@ -85,6 +85,7 @@ function App({ usuario, onSair }) {
 
   const [modoPesoAberto, setModoPesoAberto] = useState('total');
   const [filtroStatusPedido, setFiltroStatusPedido] = useState('aberto');
+  const [pedidosFaturados, setPedidosFaturados] = useState(null);
   const [mostrarIPI, setMostrarIPI] = useState(false);
   const [empresaFiltro, setEmpresaFiltro] = useState('total');
 
@@ -230,6 +231,22 @@ function App({ usuario, onSair }) {
         if (!silencioso) setCarregando(false)
       })
   }, [ordenarPor, ordem])
+
+  const carregarPedidosFaturados = useCallback(() => {
+    if (atualizacaoEmAndamento()) return;
+    const versao = controleEscrita.versao;
+    axios.get(`${API_URL}/api/pedidos/faturados`).then(res => {
+      if (!respostaDesatualizada(versao)) setPedidosFaturados(Array.isArray(res.data) ? res.data : []);
+    }).catch(err => console.error("Erro API Pedidos Faturados", err));
+  }, [])
+
+  // A lista de faturados é maior: só é buscada com a aba aberta, a cada 30 s.
+  useEffect(() => {
+    if (abaAtiva !== 'prazos' || filtroStatusPedido !== 'faturado') return;
+    carregarPedidosFaturados();
+    const intervalId = setInterval(carregarPedidosFaturados, 30000);
+    return () => clearInterval(intervalId);
+  }, [abaAtiva, filtroStatusPedido, carregarPedidosFaturados]);
 
   const carregarCompras = useCallback((silencioso = false) => {
     if (silencioso && atualizacaoEmAndamento()) return;
@@ -731,10 +748,10 @@ function App({ usuario, onSair }) {
     return { texto: `Há ${diffDays} Dias`, dias: diffDays };
   }
 
-  const pedidosFiltrados = useMemo(() => {
-    return pedidos.filter(p => {
+  const filtrarPorTermo = useCallback((lista) => {
+    const termo = termoPesquisa.toLowerCase();
+    return lista.filter(p => {
       if (!p) return false;
-      const termo = termoPesquisa.toLowerCase();
       if (!termo) return true;
 
       const matchPedido = String(p.id_pedido || '').toLowerCase().includes(termo) ||
@@ -742,22 +759,22 @@ function App({ usuario, onSair }) {
         String(p.pedido_cliente || '').toLowerCase().includes(termo);
 
       const matchOF = p.itens && p.itens.some(item => String(item.id_numof || '').toLowerCase().includes(termo));
+      const matchNF = p.notas_fiscais && p.notas_fiscais.some(nf => String(nf.numero).includes(termo));
 
-      return matchPedido || matchOF;
+      return matchPedido || matchOF || matchNF;
     });
-  }, [pedidos, termoPesquisa]);
+  }, [termoPesquisa]);
+
+  const pedidosFiltrados = useMemo(() => filtrarPorTermo(pedidos), [pedidos, filtrarPorTermo]);
 
   // FILTRO INTELIGENTE GERAL PARA A TELA DE CONTROLE DE PEDIDOS
   const pedidosAbaControle = useMemo(() => {
-    let filtrados = pedidosFiltrados;
+    // Faturados vêm de uma lista própria (inclui OFs já liquidadas), do faturamento mais recente ao mais antigo.
+    if (filtroStatusPedido === 'faturado') return filtrarPorTermo(pedidosFaturados || []);
 
-    if (filtroStatusPedido === 'aberto') {
-      filtrados = filtrados.filter(p => p.status !== 'Faturada');
-    } else {
-      filtrados = filtrados.filter(p => p.status === 'Faturada');
-    }
+    let filtrados = pedidosFiltrados.filter(p => p.status !== 'Faturada');
 
-    if (filtroStatusPedido === 'aberto' && modoPesoAberto === 'mes') {
+    if (modoPesoAberto === 'mes') {
       const endOfMonth = new Date();
       endOfMonth.setFullYear(endOfMonth.getFullYear(), endOfMonth.getMonth() + 1, 0);
       const endOfMonthStr = endOfMonth.toISOString().split('T')[0];
@@ -765,7 +782,7 @@ function App({ usuario, onSair }) {
     }
 
     return filtrados;
-  }, [pedidosFiltrados, filtroStatusPedido, modoPesoAberto]);
+  }, [pedidosFiltrados, pedidosFaturados, filtrarPorTermo, filtroStatusPedido, modoPesoAberto]);
 
   const pedidosAbaControlePaginados = useMemo(() => pedidosAbaControle.slice(0, limiteExibicao), [pedidosAbaControle, limiteExibicao]);
 
@@ -796,6 +813,20 @@ function App({ usuario, onSair }) {
         String(e.cliente || '').toLowerCase().includes(termo);
     }).slice(0, limiteExibicao);
   }, [estoque, termoPesquisaEstoque, limiteExibicao]);
+
+  // Todas as NFs/recibos do pedido (entregas parciais têm mais de uma).
+  const renderizarNotasFiscais = (pedido) => {
+    if (!pedido.notas_fiscais || pedido.notas_fiscais.length === 0) return null;
+    return (
+      <div className="flex flex-wrap gap-1.5 mt-2">
+        {pedido.notas_fiscais.map(nf => (
+          <span key={`${nf.tipo}-${nf.numero}`} title={`${nf.tipo} ${nf.numero} emitida em ${nf.data}`} className={`text-[10px] font-mono font-bold px-2 py-0.5 rounded-md border ${t.card} ${t.textSecondary} ${t.border}`}>
+            {nf.tipo} {nf.numero} · {nf.data.slice(0, 5)}
+          </span>
+        ))}
+      </div>
+    );
+  };
 
   const renderizarTagPrazo = (dias, dataEntrega) => {
     if (dias === null || dias === undefined || isNaN(dias)) return <span className={t.textSecondary}>-</span>;
@@ -1760,7 +1791,7 @@ function App({ usuario, onSair }) {
                   </div>
 
                   <div className="flex flex-col sm:flex-row w-full xl:w-auto justify-between items-stretch sm:items-center gap-3 ml-auto">
-                    <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 w-full sm:w-auto">
+                    <div className={`${filtroStatusPedido === 'faturado' ? 'hidden' : 'flex'} flex-col sm:flex-row items-stretch sm:items-center gap-2 w-full sm:w-auto`}>
                       <select value={ordenarPor} onChange={(e) => setOrdenarPor(e.target.value)} className={`w-full sm:w-auto ${t.card} text-xs font-bold ${t.textPrimary} border ${t.border} rounded-lg px-3 py-3 md:py-2 focus:outline-none focus:${t.borderAccent} cursor-pointer`}>
                         <option value="prazo">Dias Restantes</option><option value="id_pedido">Pedido</option><option value="emissao">Data Emissão</option>
                       </select>
@@ -1775,7 +1806,7 @@ function App({ usuario, onSair }) {
                   </div>
                 </div>
 
-                {carregando ? (<div className={`p-12 text-center ${t.textSecondary}`}>Carregando dados dos pedidos...</div>) : (
+                {(carregando || (filtroStatusPedido === 'faturado' && pedidosFaturados === null)) ? (<div className={`p-12 text-center ${t.textSecondary}`}>Carregando dados dos pedidos...</div>) : (
                   <>
                     <div className={modoExibicao === 'lista' ? 'flex flex-col gap-3' : 'grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-5'}>
                       {pedidosAbaControlePaginados.map((pedido) => {
@@ -1807,6 +1838,7 @@ function App({ usuario, onSair }) {
                                   <h3 className={`font-bold ${t.textPrimary} text-base leading-tight`}>{pedido.cliente}</h3>
                                   {pedido.pedido_cliente && <p className={`text-xs ${t.textAccent} font-mono font-bold mt-1`}>Pedido Cliente: {pedido.pedido_cliente}</p>}
                                   <p className={`text-[11px] ${t.textSecondary} mt-1`}>{pedido.cidade_bloco} {pedido.endereco_completo ? `• ${pedido.endereco_completo}` : ''}</p>
+                                  {renderizarNotasFiscais(pedido)}
                                 </div>
                               </div>
 
@@ -1820,7 +1852,7 @@ function App({ usuario, onSair }) {
                                 {ehAdmin && (
                                   <div className="text-left md:text-center w-[45%] md:w-auto">
                                     <span className={`block text-[10px] ${t.textSecondary} uppercase tracking-wider mb-0.5`}>{isFaturadoGeral ? 'Peso Faturado' : 'Peso'}</span>
-                                    <span className={`font-mono font-bold ${isFaturadoGeral ? t.textSecondary : t.textAccent}`}>{formatarKg(pedido.peso_total_kg)} kg</span>
+                                    <span className={`font-mono font-bold ${isFaturadoGeral ? t.textSecondary : t.textAccent}`}>{formatarKg(isFaturadoGeral ? pedido.peso_faturado_kg : pedido.peso_total_kg)} kg</span>
                                   </div>
                                 )}
                                 <div className="text-left md:text-center w-[45%] md:w-auto">
@@ -1913,6 +1945,7 @@ function App({ usuario, onSair }) {
                                   </div>
                                   <h3 className={`font-bold ${t.textPrimary} text-base leading-tight`}>{pedido.cliente}</h3>
                                   {pedido.pedido_cliente && <p className={`text-xs ${t.textAccent} font-mono font-bold mt-1`}>Pedido Cliente {pedido.pedido_cliente}</p>}
+                                  {renderizarNotasFiscais(pedido)}
                                 </div>
                                 <div className="flex-shrink-0 flex flex-col items-end gap-2">
                                   {isFaturadoGeral ? <span className={`text-[11px] font-bold ${t.textSecondary}`}>ENTREGUE</span> : renderizarTagPrazo(pedido.dias_restantes, pedido.data_entrega)}
@@ -1925,7 +1958,7 @@ function App({ usuario, onSair }) {
                               </div>
                               <div className={`my-4 py-3 border-y ${t.border} grid ${['grid-cols-1', 'grid-cols-2', 'grid-cols-3'][(isFaturadoGeral ? 0 : 1) + (ehAdmin ? 1 : 0)]} gap-2 text-center text-xs`}>
                                 {!isFaturadoGeral && <div><span className={`block text-[10px] ${t.textSecondary} uppercase tracking-wider mb-1`}>Itens Ativos</span><span className={`font-mono font-bold ${t.textPrimary}`}>{pedido.total_itens_abertos || 0}</span></div>}
-                                {ehAdmin && <div><span className={`block text-[10px] ${t.textSecondary} uppercase tracking-wider mb-1`}>{isFaturadoGeral ? 'Peso Faturado' : 'Peso Faltante'}</span><span className={`font-mono font-bold ${isFaturadoGeral ? t.textSecondary : t.textAccent}`}>{formatarKg(pedido.peso_total_kg)} kg</span></div>}
+                                {ehAdmin && <div><span className={`block text-[10px] ${t.textSecondary} uppercase tracking-wider mb-1`}>{isFaturadoGeral ? 'Peso Faturado' : 'Peso Faltante'}</span><span className={`font-mono font-bold ${isFaturadoGeral ? t.textSecondary : t.textAccent}`}>{formatarKg(isFaturadoGeral ? pedido.peso_faturado_kg : pedido.peso_total_kg)} kg</span></div>}
                                 <div><span className={`block text-[10px] ${t.textSecondary} uppercase tracking-wider mb-1`}>Emissão</span><span className={`font-mono ${t.textPrimary}`}>{pedido.data_emissao || '-'}</span></div>
                               </div>
                             </div>
