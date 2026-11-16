@@ -14,3 +14,10 @@ backend/logs/
 
 # Cópias de trabalho do git
 .worktrees/
+
+# Banco local e dados da empresa (ficam só na máquina; backups diários em backups_banco/)
+*.db
+backend/kanban_status.json
+backend/backups_banco/
+firebird.log
+.pytest_cache/

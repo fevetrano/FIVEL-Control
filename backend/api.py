@@ -18,6 +18,7 @@ from flask_cors import CORS
 from werkzeug.exceptions import HTTPException
 
 import auth
+import backup_banco
 
 # --- CARREGA O CAMINHO ABSOLUTO DA DLL E SUAS DEPENDÊNCIAS ---
 BASE_DIR = os.path.abspath(os.path.dirname(__file__))
@@ -1063,6 +1064,29 @@ def _loop_fechamento():
     while True:
         garantir_fechamentos()
         time.sleep(INTERVALO_FECHAMENTO_SEG)
+
+
+# --- BACKUP DIÁRIO DO BANCO LOCAL ---
+PASTA_BACKUP = backup_banco.pasta_padrao(BASE_DIR)
+INTERVALO_BACKUP_SEG = 3600
+
+
+def executar_backup_diario():
+    """Cria o backup do dia se ainda não existir. Falha vai para o log e não derruba a API."""
+    try:
+        criado = backup_banco.fazer_backup(SQLITE_DB, PASTA_BACKUP)
+        if criado:
+            logger.info("Backup do banco salvo em %s", criado)
+        return criado
+    except Exception as e:
+        logger.error("Falha no backup diário do banco", exc_info=e)
+        return None
+
+
+def _loop_backup():
+    while True:
+        executar_backup_diario()
+        time.sleep(INTERVALO_BACKUP_SEG)
 
 
 @app.route("/api/calendario_pesos", methods=["GET"])
@@ -2343,6 +2367,24 @@ def serve_frontend(path):
         return send_from_directory(app.static_folder, "index.html")
     return jsonify({"mensagem": "API do FIVEL Control ativa. Frontend dist não encontrado."}), 200
 
+THREADS_SERVIDOR = 8
+
+
+def iniciar_servidor():
+    """Produção roda no Waitress. Se ele não estiver instalado, cai no servidor do Flask
+    para o sistema não ficar fora do ar (e registra o aviso no log)."""
+    porta = int(os.getenv("FIVEL_PORT", 5000))
+    try:
+        from waitress import serve
+    except ImportError:
+        logger.warning("Waitress não instalado; usando o servidor de desenvolvimento do Flask.")
+        app.run(debug=False, host="0.0.0.0", port=porta, threaded=True)
+        return
+    logger.info("API iniciada com Waitress na porta %s", porta)
+    serve(app, host="0.0.0.0", port=porta, threads=THREADS_SERVIDOR)
+
+
 if __name__ == "__main__":
     threading.Thread(target=_loop_fechamento, name="fechamento-mensal", daemon=True).start()
-    app.run(debug=False, host="0.0.0.0", port=int(os.getenv("FIVEL_PORT", 5000)), threaded=True)
+    threading.Thread(target=_loop_backup, name="backup-diario", daemon=True).start()
+    iniciar_servidor()
